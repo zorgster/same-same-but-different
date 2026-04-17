@@ -4,14 +4,14 @@ Browser-based data validation tools for comparing and reconciling spreadsheet ex
 
 ## What this project does
 
-- Compare lists of people across files
+- Compare columns of data across files
 - Detect missing and additional records
 - Flag changed values (for example, same ID with different name)
 - Provide a portal pattern for adding future validation tools
 
 ## Current tool
 
-- Roster Compare: compare two spreadsheet uploads and highlight mismatches
+- Column Compare: compare two spreadsheet uploads and highlight missing, added, and changed values
 
 ## Project structure
 

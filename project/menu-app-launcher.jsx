@@ -1,5 +1,5 @@
 import { useState } from "react";
-import RosterApp from "./roster-compare.jsx";
+import DataCompareApp from "./column-compare.jsx";
 
 const COLORS = {
   bg: "#f5f7fb",
@@ -15,9 +15,9 @@ const COLORS = {
 
 const APPS = [
   {
-    id: "roster-compare",
-    name: "Roster compare",
-    desc: "Compare two uploads to find missing IDs and changed names",
+    id: "column-compare",
+    name: "Column compare",
+    desc: "Compare two uploads (XLSX, CSV) to find missing IDs and changed names",
     status: "live",
   },
   {
@@ -39,6 +39,12 @@ const APPS = [
     status: "soon",
   },
 ];
+
+const CONTACT = {
+  owner: "Oliver Slay, PhD",
+  githubDiscussions: "https://github.com/zorgster/same-same-but-different/discussions",
+  discordInvite: "#",
+};
 
 const styles = {
   page: {
@@ -72,6 +78,32 @@ const styles = {
     maxWidth: 940,
     margin: "0 auto",
     padding: "28px 20px 36px",
+  },
+  footer: {
+    marginTop: 24,
+    paddingTop: 16,
+    borderTop: `1px solid ${COLORS.border}`,
+    display: "flex",
+    gap: 12,
+    justifyContent: "space-between",
+    alignItems: "center",
+    flexWrap: "wrap",
+  },
+  footerText: {
+    fontSize: 12,
+    color: COLORS.muted,
+  },
+  footerLinks: {
+    display: "flex",
+    gap: 10,
+    alignItems: "center",
+    flexWrap: "wrap",
+  },
+  footerLink: {
+    fontSize: 12,
+    color: COLORS.accent,
+    fontWeight: 600,
+    textDecoration: "none",
   },
   sectionTitle: {
     fontSize: 12,
@@ -148,19 +180,20 @@ const styles = {
 
 export default function MenuAppLauncher() {
   const [activeTool, setActiveTool] = useState(null);
+  const currentYear = new Date().getFullYear();
 
-  if (activeTool === "roster-compare") {
+  if (activeTool === "column-compare") {
     return (
       <div style={styles.page}>
         <div style={styles.topbar}>
           <button style={styles.backButton} onClick={() => setActiveTool(null)}>
             Back to portal
           </button>
-          <div style={styles.topbarTitle}>Roster compare</div>
+          <div style={styles.topbarTitle}>Column compare</div>
           <div style={styles.topbarSubtitle}>SameSameButDifferent</div>
         </div>
         <div style={styles.toolFrame}>
-          <RosterApp />
+          <DataCompareApp />
         </div>
       </div>
     );
@@ -194,6 +227,31 @@ export default function MenuAppLauncher() {
             );
           })}
         </div>
+
+        <footer style={styles.footer}>
+          <div style={styles.footerText}>
+            (c) {currentYear} SameSameButDifferent. Created, designed, and maintained by {CONTACT.owner}.
+          </div>
+          <div style={styles.footerLinks}>
+            <span style={styles.footerText}>Public contact:</span>
+            <a
+              href={CONTACT.githubDiscussions}
+              target="_blank"
+              rel="noreferrer"
+              style={styles.footerLink}
+            >
+              GitHub Discussions
+            </a>
+            <a
+              href={CONTACT.discordInvite}
+              target="_blank"
+              rel="noreferrer"
+              style={styles.footerLink}
+            >
+              Discord
+            </a>
+          </div>
+        </footer>
       </main>
     </div>
   );

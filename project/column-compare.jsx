@@ -349,7 +349,7 @@ function ResultTable({ rows, color, emptyMsg }) {
   );
 }
 
-export default function RosterApp() {
+export default function DataCompareApp() {
   const [dataA, setDataA] = useState(null);
   const [dataB, setDataB] = useState(null);
   const [nameA, setNameA] = useState(null);
@@ -400,9 +400,9 @@ export default function RosterApp() {
   return (
     <div style={styles.app}>
       <div style={styles.header}>
-        <h1 style={styles.title}>Roster Checker</h1>
+        <h1 style={styles.title}>Column Data Compare</h1>
         <p style={styles.subtitle}>
-          Compare two student lists — instantly see who's missing
+          Compare selected columns across two datasets to find missing, added, and changed values
         </p>
       </div>
 
@@ -432,7 +432,7 @@ export default function RosterApp() {
       )}
 
       <button style={styles.compareBtn(!ready)} onClick={compare} disabled={!ready}>
-        {ready ? "Compare Rosters →" : "Upload & configure both spreadsheets"}
+        {ready ? "Compare Data →" : "Upload & configure both spreadsheets"}
       </button>
 
       {results && (

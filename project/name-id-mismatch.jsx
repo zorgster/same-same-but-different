@@ -400,9 +400,9 @@ export default function DataCompareApp() {
   return (
     <div style={styles.app}>
       <div style={styles.header}>
-        <h1 style={styles.title}>Column Data Compare</h1>
+        <h1 style={styles.title}>Name-ID Mismatch Checker</h1>
         <p style={styles.subtitle}>
-          Compare selected columns across two datasets to find missing, added, and changed values
+          Compare Name and ID columns from two datasets to find missing, added, and changed values
         </p>
       </div>
 

@@ -4,19 +4,32 @@ Browser-based data validation tools for comparing and reconciling spreadsheet ex
 
 ## What this project does
 
-- Compare columns of data across files
+- Compare data across files
 - Detect missing and additional records
 - Flag changed values (for example, same ID with different name)
 - Provide a portal pattern for adding future validation tools
 
 ## Current tool
 
-- Column Compare: compare two spreadsheet uploads and highlight missing, added, and changed values
+- Name-ID Mismatch Checker: compare Names and IDs in two spreadsheet uploads and highlight missing, added, and changed values
 
 ## Project structure
 
 - `project/` - Vite + React application
+- `project/apps-config.jsx` - Portal tool registry and metadata
 - `.gitignore` - Git ignore rules for Node and React artifacts
+
+## Adding a new tool
+
+1. Create a new tool component file in `project/` (for example `new-validator.jsx`).
+2. Import it in `project/apps-config.jsx`.
+3. Add an item inside a section's `apps` array with `component: YourComponent` for live tools, or `component: null` for coming-soon tools.
+
+## Grouping tools into sections
+
+- `APPS` is section-based: each section has `id`, `title`, and `apps`.
+- Example sections include Tool Portal and Genomics Tools.
+- Add new domain collections by adding another section object in `project/apps-config.jsx`.
 
 ## Local development
 

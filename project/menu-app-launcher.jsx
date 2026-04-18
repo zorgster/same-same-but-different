@@ -1,5 +1,5 @@
 import { useState } from "react";
-import DataCompareApp from "./column-compare.jsx";
+import { APPS } from "./apps-config.jsx";
 
 const COLORS = {
   bg: "#f5f7fb",
@@ -12,33 +12,6 @@ const COLORS = {
   soonBg: "#eef2ff",
   soonText: "#4f46e5",
 };
-
-const APPS = [
-  {
-    id: "column-compare",
-    name: "Column compare",
-    desc: "Compare two uploads (XLSX, CSV) to find missing IDs and changed names",
-    status: "live",
-  },
-  {
-    id: "masterlist-merge",
-    name: "Masterlist merge",
-    desc: "Merge near-identical lists while preserving trusted master records",
-    status: "soon",
-  },
-  {
-    id: "email-id-validator",
-    name: "Email and ID validator",
-    desc: "Validate required fields, formats, duplicates, and blank cells",
-    status: "soon",
-  },
-  {
-    id: "column-shift-check",
-    name: "Column shift check",
-    desc: "Detect accidental column shifts and mapping misalignments",
-    status: "soon",
-  },
-];
 
 const CONTACT = {
   owner: "Oliver Slay, PhD",
@@ -113,6 +86,9 @@ const styles = {
     marginBottom: 12,
     fontWeight: 700,
   },
+  sectionBlock: {
+    marginBottom: 20,
+  },
   grid: {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))",
@@ -181,19 +157,22 @@ const styles = {
 export default function MenuAppLauncher() {
   const [activeTool, setActiveTool] = useState(null);
   const currentYear = new Date().getFullYear();
+  const allApps = APPS.flatMap((section) => section.apps || []);
+  const activeApp = allApps.find((app) => app.id === activeTool);
+  const ActiveComponent = activeApp?.component;
 
-  if (activeTool === "column-compare") {
+  if (ActiveComponent) {
     return (
       <div style={styles.page}>
         <div style={styles.topbar}>
           <button style={styles.backButton} onClick={() => setActiveTool(null)}>
             Back to portal
           </button>
-          <div style={styles.topbarTitle}>Column compare</div>
+          <div style={styles.topbarTitle}>{activeApp.name}</div>
           <div style={styles.topbarSubtitle}>SameSameButDifferent</div>
         </div>
         <div style={styles.toolFrame}>
-          <DataCompareApp />
+          <ActiveComponent />
         </div>
       </div>
     );
@@ -206,27 +185,31 @@ export default function MenuAppLauncher() {
         <div style={styles.topbarSubtitle}>SSBD - Data Validation Portal</div>
       </div>
       <main style={styles.home}>
-        <div style={styles.sectionTitle}>Tool Portal</div>
-        <div style={styles.grid}>
-          {APPS.map((app) => {
-            const isLive = app.status === "live";
-            return (
-              <article
-                key={app.id}
-                style={{ ...styles.card, ...(isLive ? {} : styles.cardSoon) }}
-                onClick={() => {
-                  if (isLive) setActiveTool(app.id);
-                }}
-              >
-                <span style={isLive ? styles.badgeLive : styles.badgeSoon}>
-                  {isLive ? "Live" : "Soon"}
-                </span>
-                <div style={styles.cardName}>{app.name}</div>
-                <div style={styles.cardDesc}>{app.desc}</div>
-              </article>
-            );
-          })}
-        </div>
+        {APPS.map((section) => (
+          <section key={section.id} style={styles.sectionBlock}>
+            <div style={styles.sectionTitle}>{section.title}</div>
+            <div style={styles.grid}>
+              {(section.apps || []).map((app) => {
+                const isLive = app.status === "live";
+                return (
+                  <article
+                    key={app.id}
+                    style={{ ...styles.card, ...(isLive ? {} : styles.cardSoon) }}
+                    onClick={() => {
+                      if (app.component) setActiveTool(app.id);
+                    }}
+                  >
+                    <span style={isLive ? styles.badgeLive : styles.badgeSoon}>
+                      {isLive ? "Live" : "Soon"}
+                    </span>
+                    <div style={styles.cardName}>{app.name}</div>
+                    <div style={styles.cardDesc}>{app.desc}</div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        ))}
 
         <footer style={styles.footer}>
           <div style={styles.footerText}>

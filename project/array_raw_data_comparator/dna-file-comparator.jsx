@@ -103,7 +103,7 @@ function computeChrStats(snpMap) {
     if (!chr) continue;
     
     if (!stats[chr]) {
-      stats[chr] = { total: 0, het: 0, hom: 0, noCalls: 0, avgDistance: null };
+      stats[chr] = { total: 0, het: 0, hom: 0, hemi: 0, noCalls: 0, avgDistance: null };
       chrSnps[chr] = [];
     }
     
@@ -112,6 +112,9 @@ function computeChrStats(snpMap) {
     const geno = snp.geno;
     if (geno === "--") {
       stats[chr].noCalls += 1;
+    } else if (geno.length === 1) {
+      // Common on X/Y in haploid regions (e.g., 23andMe male samples)
+      stats[chr].hemi += 1;
     } else if (geno.length === 2 && geno[0] === geno[1]) {
       stats[chr].hom += 1;
     } else if (geno.length === 2 && geno[0] !== geno[1]) {
@@ -598,7 +601,7 @@ export default function DnaFileComparatorApp() {
 
   const columns =
     activeTab === "summary"
-      ? ["Chr", "File A - Total", "Het", "Hom", "No-Calls", "Avg Dist", "File B - Total", "Het", "Hom", "No-Calls", "Avg Dist"]
+      ? ["Chr", "File A - Total", "Het", "Hom", "Hemi", "No-Calls", "Avg Dist", "File B - Total", "Het", "Hom", "Hemi", "No-Calls", "Avg Dist"]
       : activeTab === "discordant"
         ? ["rsID", "Chr", "Pos", "Genotype (A)", "Genotype (B)", "Notes"]
         : activeTab === "rsidMismatch"
@@ -685,9 +688,14 @@ export default function DnaFileComparatorApp() {
               <thead>
                 <tr>
                   {columns.map((column, colIndex) => {
-                    const isSummarySeparator = activeTab === "summary" && (colIndex === 0 || colIndex === 5);
+                    const isSummarySeparator = activeTab === "summary" && (colIndex === 0 || colIndex === 6);
                     return (
-                      <th key={column} style={{ ...styles.th, ...(isSummarySeparator ? { borderRight: "2px solid #8fb0e8" } : {}) }}>{column}</th>
+                      <th
+                        key={`${activeTab}-${colIndex}-${column}`}
+                        style={{ ...styles.th, ...(isSummarySeparator ? { borderRight: "2px solid #8fb0e8" } : {}) }}
+                      >
+                        {column}
+                      </th>
                     );
                   })}
                 </tr>
@@ -703,19 +711,21 @@ export default function DnaFileComparatorApp() {
                   const key = `${activeTab}-${index}-${row.rid || row.rsid || row.ridA || row.chr || "row"}`;
                   
                   if (activeTab === "summary") {
-                    const statA = row.statsA || { total: 0, het: 0, hom: 0, noCalls: 0, avgDistance: null };
-                    const statB = row.statsB || { total: 0, het: 0, hom: 0, noCalls: 0, avgDistance: null };
+                    const statA = row.statsA || { total: 0, het: 0, hom: 0, hemi: 0, noCalls: 0, avgDistance: null };
+                    const statB = row.statsB || { total: 0, het: 0, hom: 0, hemi: 0, noCalls: 0, avgDistance: null };
                     return (
                       <tr key={key}>
                         <td style={{ ...styles.td, borderRight: "2px solid #8fb0e8" }}><strong>{row.chr}</strong></td>
                         <td style={styles.td}>{statA.total.toLocaleString()}</td>
                         <td style={styles.td}>{statA.het.toLocaleString()}</td>
                         <td style={styles.td}>{statA.hom.toLocaleString()}</td>
+                        <td style={styles.td}>{statA.hemi.toLocaleString()}</td>
                         <td style={styles.td}>{statA.noCalls.toLocaleString()}</td>
                         <td style={{ ...styles.td, borderRight: "2px solid #8fb0e8", fontSize: 12, color: "#5f6f84", fontWeight: 500 }}>{statA.avgDistance || "—"}</td>
                         <td style={styles.td}>{statB.total.toLocaleString()}</td>
                         <td style={styles.td}>{statB.het.toLocaleString()}</td>
                         <td style={styles.td}>{statB.hom.toLocaleString()}</td>
+                        <td style={styles.td}>{statB.hemi.toLocaleString()}</td>
                         <td style={styles.td}>{statB.noCalls.toLocaleString()}</td>
                         <td style={{ ...styles.td, fontSize: 12, color: "#5f6f84", fontWeight: 500 }}>{statB.avgDistance || "—"}</td>
                       </tr>

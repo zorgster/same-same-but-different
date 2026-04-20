@@ -1,6 +1,7 @@
 import NameIdMismatchApp from "./name-id-mismatch.jsx";
 import EmailValidatorApp from "./email-validator.jsx";
 import VcfHeaderReaderApp from "./vcf-header-reader/VcfHeaderReaderApp.jsx";
+import DnaFileComparatorApp from "./array_raw_data_comparator/dna-file-comparator.jsx";
 
 export const APPS = [
   {
@@ -47,6 +48,13 @@ export const APPS = [
         desc: "Read and inspect VCF, VCF.GZ, or BCF headers",
         status: "live",
         component: VcfHeaderReaderApp,
+      },
+      {
+        id: "array-raw-data-comparator",
+        name: "Array Raw Data Comparator",
+        desc: "Compare raw data files from genomic arrays to find discrepancies",
+        status: "live",
+        component: DnaFileComparatorApp,
       },
       {
         id: "genomics-placeholder",

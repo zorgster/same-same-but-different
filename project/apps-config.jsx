@@ -1,6 +1,6 @@
 import NameIdMismatchApp from "./name-id-mismatch.jsx";
 import EmailValidatorApp from "./email-validator.jsx";
-import VcfHeaderReaderApp from "./vcf-header-reader.jsx";
+import VcfHeaderReaderApp from "./vcf-header-reader/VcfHeaderReaderApp.jsx";
 
 export const APPS = [
   {

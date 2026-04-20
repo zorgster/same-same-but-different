@@ -14,7 +14,7 @@ const COLORS = {
 };
 
 const CONTACT = {
-  owner: "Oliver Slay, PhD",
+  owner: "TexiGene",
   githubDiscussions: "https://github.com/zorgster/same-same-but-different/discussions",
   discordInvite: "#",
 };

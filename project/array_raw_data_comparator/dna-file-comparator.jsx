@@ -33,6 +33,7 @@ const PAGE_SIZE = 50;
 const TEXT_DATA_FILE_REGEX = /\.(txt|csv|tsv)$/i;
 
 const TAB_DEFS = [
+  { key: "summary", label: "Summary" },
   { key: "concordant", label: "Concordant" },
   { key: "discordant", label: "Discordant" },
   { key: "rsidMismatch", label: "rsID mismatch" },
@@ -41,6 +42,7 @@ const TAB_DEFS = [
 ];
 
 const TAB_TONES = {
+  summary: { activeBg: "#f3f7ff", activeBorder: "#8fb0e8", activeText: "#1f4f99" },
   concordant: { activeBg: "#ebf8ee", activeBorder: "#8dc99a", activeText: "#2b6a39" },
   discordant: { activeBg: "#ffe9e7", activeBorder: "#de9fba", activeText: "#b42318" },
   rsidMismatch: { activeBg: "#fff6e8", activeBorder: "#e5bb7f", activeText: "#8a5a1f" },
@@ -89,6 +91,32 @@ function getLocusKey(snp) {
   const pos = String(snp?.pos || "").trim();
   if (!chr || !pos) return null;
   return `${chr}:${pos}`;
+}
+
+function computeChrStats(snpMap) {
+  const stats = {};
+  
+  for (const [, snp] of snpMap) {
+    const chr = normalizeChromosome(snp.chr);
+    if (!chr) continue;
+    
+    if (!stats[chr]) {
+      stats[chr] = { total: 0, het: 0, hom: 0, noCalls: 0 };
+    }
+    
+    stats[chr].total += 1;
+    
+    const geno = snp.geno;
+    if (geno === "--") {
+      stats[chr].noCalls += 1;
+    } else if (geno.length === 2 && geno[0] === geno[1]) {
+      stats[chr].hom += 1;
+    } else if (geno.length === 2 && geno[0] !== geno[1]) {
+      stats[chr].het += 1;
+    }
+  }
+  
+  return stats;
 }
 
 function getDbSnpUrl(rsid) {
@@ -321,7 +349,7 @@ const styles = {
   }),
   badge: (bg, fg) => ({ borderRadius: 4, padding: "2px 8px", fontSize: 11, fontWeight: 600, background: bg, color: fg }),
   note: { background: "#eaf2ff", borderRadius: 8, padding: "10px 12px", color: "#1f4f99", fontSize: 12, marginBottom: 12 },
-  statsRow: { display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 10, marginBottom: 14 },
+  statsRow: { display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 10, marginBottom: 14 },
   stat: (active, tone) => ({
     background: active ? tone.activeBg : "#f5f8fc",
     border: `${active ? 2 : 1}px solid ${active ? tone.activeBorder : "#c7d3e3"}`,
@@ -448,9 +476,10 @@ function FileDrop({ label, tone, fileData, onFile, onClear }) {
 export default function DnaFileComparatorApp() {
   const [fileA, setFileA] = useState(null);
   const [fileB, setFileB] = useState(null);
-  const [activeTab, setActiveTab] = useState("discordant");
+  const [activeTab, setActiveTab] = useState("summary");
   const [errorMessage, setErrorMessage] = useState("");
   const [pageByTab, setPageByTab] = useState({
+    summary: 0,
     discordant: 0,
     rsidMismatch: 0,
     onlyA: 0,
@@ -463,20 +492,39 @@ export default function DnaFileComparatorApp() {
     return compareFiles(fileA, fileB);
   }, [fileA, fileB]);
 
-  const activeRows = useMemo(() => getRows(compared, activeTab), [compared, activeTab]);
+  const summaryRows = useMemo(() => {
+    if (!fileA || !fileB) return [];
+    const statsA = computeChrStats(fileA.snps);
+    const statsB = computeChrStats(fileB.snps);
+    const allChrs = new Set([...Object.keys(statsA), ...Object.keys(statsB)]);
+    const chrOrder = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "X", "Y", "MT"];
+    const sorted = Array.from(allChrs).sort((a, b) => {
+      const indexA = chrOrder.indexOf(a);
+      const indexB = chrOrder.indexOf(b);
+      return (indexA === -1 ? 999 : indexA) - (indexB === -1 ? 999 : indexB);
+    });
+    return sorted.map((chr) => ({ chr, statsA: statsA[chr], statsB: statsB[chr] }));
+  }, [fileA, fileB]);
+
+  const activeRows = useMemo(() => {
+    if (activeTab === "summary") return summaryRows;
+    return getRows(compared, activeTab);
+  }, [compared, activeTab, summaryRows]);
+
   const totalPages = Math.max(1, Math.ceil(activeRows.length / PAGE_SIZE));
   const page = Math.min(pageByTab[activeTab] || 0, totalPages - 1);
   const pagedRows = activeRows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
 
   const counts = compared
     ? {
+        summary: summaryRows.length,
         discordant: compared.discordant.length,
         rsidMismatch: compared.rsidMismatch.length,
         onlyA: compared.onlyA.length,
         onlyB: compared.onlyB.length,
         concordant: compared.concordant.length,
       }
-    : { discordant: 0, rsidMismatch: 0, onlyA: 0, onlyB: 0, concordant: 0 };
+    : { summary: 0, discordant: 0, rsidMismatch: 0, onlyA: 0, onlyB: 0, concordant: 0 };
 
   const formatNotes = useMemo(() => {
     if (!fileA || !fileB) return [];
@@ -522,8 +570,8 @@ export default function DnaFileComparatorApp() {
     sampleB.name = "sample_ancestry.txt";
     setFileA(sampleA);
     setFileB(sampleB);
-    setActiveTab("discordant");
-    setPageByTab({ discordant: 0, rsidMismatch: 0, onlyA: 0, onlyB: 0, concordant: 0 });
+    setActiveTab("summary");
+    setPageByTab({ summary: 0, discordant: 0, rsidMismatch: 0, onlyA: 0, onlyB: 0, concordant: 0 });
   };
 
   const setPage = (tab, nextPage) => {
@@ -531,11 +579,13 @@ export default function DnaFileComparatorApp() {
   };
 
   const columns =
-    activeTab === "discordant"
-      ? ["rsID", "Chr", "Pos", "Genotype (A)", "Genotype (B)", "Notes"]
-      : activeTab === "rsidMismatch"
-        ? ["rsID (A)", "rsID (B)", "Chr", "Pos", "Geno (A)", "Geno (B)"]
-        : ["rsID", "Chr", "Pos", "Genotype"];
+    activeTab === "summary"
+      ? ["Chr", "File A - Total", "Het", "Hom", "No-Calls", "File B - Total", "Het", "Hom", "No-Calls"]
+      : activeTab === "discordant"
+        ? ["rsID", "Chr", "Pos", "Genotype (A)", "Genotype (B)", "Notes"]
+        : activeTab === "rsidMismatch"
+          ? ["rsID (A)", "rsID (B)", "Chr", "Pos", "Geno (A)", "Geno (B)"]
+          : ["rsID", "Chr", "Pos", "Genotype"];
 
   return (
     <div style={styles.wrap}>
@@ -616,9 +666,12 @@ export default function DnaFileComparatorApp() {
             <table style={styles.table}>
               <thead>
                 <tr>
-                  {columns.map((column) => (
-                    <th key={column} style={styles.th}>{column}</th>
-                  ))}
+                  {columns.map((column, colIndex) => {
+                    const isSummarySeparator = activeTab === "summary" && (colIndex === 0 || colIndex === 4);
+                    return (
+                      <th key={column} style={{ ...styles.th, ...(isSummarySeparator ? { borderRight: "2px solid #8fb0e8" } : {}) }}>{column}</th>
+                    );
+                  })}
                 </tr>
               </thead>
               <tbody>
@@ -629,7 +682,26 @@ export default function DnaFileComparatorApp() {
                 ) : null}
 
                 {pagedRows.map((row, index) => {
-                  const key = `${activeTab}-${index}-${row.rid || row.rsid || row.ridA || "row"}`;
+                  const key = `${activeTab}-${index}-${row.rid || row.rsid || row.ridA || row.chr || "row"}`;
+                  
+                  if (activeTab === "summary") {
+                    const statA = row.statsA || { total: 0, het: 0, hom: 0, noCalls: 0 };
+                    const statB = row.statsB || { total: 0, het: 0, hom: 0, noCalls: 0 };
+                    return (
+                      <tr key={key}>
+                        <td style={{ ...styles.td, borderRight: "2px solid #8fb0e8" }}><strong>{row.chr}</strong></td>
+                        <td style={styles.td}>{statA.total.toLocaleString()}</td>
+                        <td style={styles.td}>{statA.het.toLocaleString()}</td>
+                        <td style={styles.td}>{statA.hom.toLocaleString()}</td>
+                        <td style={{ ...styles.td, borderRight: "2px solid #8fb0e8" }}>{statA.noCalls.toLocaleString()}</td>
+                        <td style={styles.td}>{statB.total.toLocaleString()}</td>
+                        <td style={styles.td}>{statB.het.toLocaleString()}</td>
+                        <td style={styles.td}>{statB.hom.toLocaleString()}</td>
+                        <td style={styles.td}>{statB.noCalls.toLocaleString()}</td>
+                      </tr>
+                    );
+                  }
+
                   if (activeTab === "discordant") {
                     return (
                       <tr key={key}>

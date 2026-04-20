@@ -52,7 +52,7 @@ export const APPS = [
       {
         id: "array-raw-data-comparator",
         name: "Array Raw Data Comparator",
-        desc: "Compare raw data files from genomic arrays to find discrepancies",
+        desc: "Compare raw data files from genomic arrays (23andMe, Ancestry) to find discrepancies",
         status: "live",
         component: DnaFileComparatorApp,
       },

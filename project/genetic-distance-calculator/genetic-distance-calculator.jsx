@@ -533,6 +533,10 @@ export default function GeneticDistanceCalculatorApp() {
   return (
     <section style={CARD_STYLE}>
       <h2 style={{ marginTop: 0, marginBottom: 8 }}>Genetic Distance Calculator</h2>
+      <p style={{ marginTop: 0, marginBottom: 14, color: "#4f5f73" }}>
+        Calculate the genetic distance in centimorgans (cM) across DNA segments using recombination maps.
+        Enter a chromosome and start/end positions manually, or drop a table file (for example, '23andMe relatives download') to map columns and calculate cM for multiple segments at once.
+      </p>
       <div
         style={DROPZONE_STYLE}
         onDragOver={(event) => event.preventDefault()}

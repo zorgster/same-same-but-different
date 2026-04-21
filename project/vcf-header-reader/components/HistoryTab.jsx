@@ -25,6 +25,7 @@ function getHistoryTone(family) {
   const map = {
     gatk: TONES.violet,
     bcftools: TONES.blue,
+    dragen: TONES.teal,
     freebayes: TONES.teal,
     picard: TONES.amber,
     samtools: TONES.green,
@@ -98,6 +99,17 @@ export default function HistoryTab({ history }) {
                   </div>
                 </button>
 
+                {isExpanded && String(h.family || "").toLowerCase() === "dragen" && h.runSignals?.length ? (
+                  <div style={styles.historySection}>
+                    <div style={styles.historySectionLabel}>Detected run modes</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {h.runSignals.map((signal, signalIndex) => (
+                        <span key={`${signal}-${signalIndex}`} style={styles.historyBadge(TONES.teal)}>{signal}</span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
                 {isExpanded && h.options.length ? (
                   <div style={styles.historySection}>
                     <div style={styles.historySectionLabel}>{String(h.key || "").toLowerCase() === "vep" ? "VEP metadata" : "Command options"}</div>
@@ -125,6 +137,17 @@ export default function HistoryTab({ history }) {
                         <div style={styles.codeBlock}>{h.commandLineOptions}</div>
                       </div>
                     ) : null}
+                  </div>
+                ) : null}
+
+                {isExpanded && String(h.family || "").toLowerCase() !== "dragen" && h.runSignals?.length ? (
+                  <div style={styles.historySection}>
+                    <div style={styles.historySectionLabel}>Detected run modes</div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                      {h.runSignals.map((signal, signalIndex) => (
+                        <span key={`${signal}-${signalIndex}`} style={styles.historyBadge(TONES.teal)}>{signal}</span>
+                      ))}
+                    </div>
                   </div>
                 ) : null}
 

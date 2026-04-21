@@ -2,17 +2,17 @@ import { useState, useCallback } from "react";
 import * as XLSX from "xlsx";
 
 const COLORS = {
-  bg: "#0f1117",
-  surface: "#1a1d27",
-  border: "#2a2d3e",
+  bg: "#f8f9fb",
+  surface: "#fff",
+  border: "#e0e3eb",
   accent: "#f0a500",
-  accentDim: "#f0a50022",
+  accentDim: "#fff7e0",
   red: "#e05c5c",
-  redDim: "#e05c5c22",
+  redDim: "#ffeaea",
   green: "#4caf88",
-  greenDim: "#4caf8822",
-  text: "#e8eaf0",
-  muted: "#6b7080",
+  greenDim: "#e6f7f1",
+  text: "#222",
+  muted: "#7b7e8b",
 };
 
 const styles = {
@@ -244,7 +244,7 @@ function DropZone({ label, onFile, data, nameCol, idCol, onSelectCol }) {
       const rows = await parseFile(file);
       onFile(rows, file.name);
     },
-    [onFile]
+    [onFile],
   );
 
   const handleChange = useCallback(
@@ -255,7 +255,7 @@ function DropZone({ label, onFile, data, nameCol, idCol, onSelectCol }) {
       const rows = await parseFile(file);
       onFile(rows, file.name);
     },
-    [onFile]
+    [onFile],
   );
 
   const headers = data ? data[0] : [];
@@ -264,7 +264,10 @@ function DropZone({ label, onFile, data, nameCol, idCol, onSelectCol }) {
   return (
     <div
       style={styles.dropZone(drag)}
-      onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDrag(true);
+      }}
       onDragLeave={() => setDrag(false)}
       onDrop={handleDrop}
     >
@@ -278,7 +281,8 @@ function DropZone({ label, onFile, data, nameCol, idCol, onSelectCol }) {
         />
         {!fileName ? (
           <p style={styles.dropText}>
-            Drop your spreadsheet here<br />
+            Drop your spreadsheet here
+            <br />
             <span style={{ fontSize: 11 }}>Excel or CSV · click to browse</span>
           </p>
         ) : (
@@ -290,7 +294,14 @@ function DropZone({ label, onFile, data, nameCol, idCol, onSelectCol }) {
       </label>
       {headers.length > 0 && (
         <div>
-          <div style={{ marginTop: 14, marginBottom: 6, fontSize: 11, color: COLORS.muted }}>
+          <div
+            style={{
+              marginTop: 14,
+              marginBottom: 6,
+              fontSize: 11,
+              color: COLORS.muted,
+            }}
+          >
             Select <b style={{ color: COLORS.accent }}>Name</b> column:
           </div>
           <div style={styles.colPicker}>
@@ -304,7 +315,14 @@ function DropZone({ label, onFile, data, nameCol, idCol, onSelectCol }) {
               </button>
             ))}
           </div>
-          <div style={{ marginTop: 10, marginBottom: 6, fontSize: 11, color: COLORS.muted }}>
+          <div
+            style={{
+              marginTop: 10,
+              marginBottom: 6,
+              fontSize: 11,
+              color: COLORS.muted,
+            }}
+          >
             Select <b style={{ color: COLORS.accent }}>ID</b> column:
           </div>
           <div style={styles.colPicker}>
@@ -338,7 +356,10 @@ function ResultTable({ rows, color, emptyMsg }) {
         </thead>
         <tbody>
           {rows.map((r, i) => (
-            <tr key={i} style={{ background: i % 2 === 0 ? "transparent" : `${color}08` }}>
+            <tr
+              key={i}
+              style={{ background: i % 2 === 0 ? "transparent" : `${color}08` }}
+            >
               <td style={styles.td}>{r.name}</td>
               <td style={{ ...styles.td, color }}>{r.id}</td>
             </tr>
@@ -368,14 +389,24 @@ export default function DataCompareApp() {
   };
 
   const ready =
-    dataA && dataB && nameA !== null && idA !== null && nameB !== null && idB !== null;
+    dataA &&
+    dataB &&
+    nameA !== null &&
+    idA !== null &&
+    nameB !== null &&
+    idB !== null;
 
   const compare = () => {
     const extract = (data, nameCol, idCol) =>
-      data.slice(1).map((row) => ({
-        name: String(row[nameCol] ?? "").trim(),
-        id: String(row[idCol] ?? "").trim().toUpperCase(),
-      })).filter((r) => r.id);
+      data
+        .slice(1)
+        .map((row) => ({
+          name: String(row[nameCol] ?? "").trim(),
+          id: String(row[idCol] ?? "")
+            .trim()
+            .toUpperCase(),
+        }))
+        .filter((r) => r.id);
 
     const listA = extract(dataA, nameA, idA);
     const listB = extract(dataB, nameB, idB);
@@ -391,7 +422,9 @@ export default function DataCompareApp() {
     const mapA = Object.fromEntries(listA.map((r) => [r.id, r.name]));
     const mapB = Object.fromEntries(listB.map((r) => [r.id, r.name]));
     const nameMismatches = matched
-      .filter((r) => mapB[r.id] && mapB[r.id].toLowerCase() !== r.name.toLowerCase())
+      .filter(
+        (r) => mapB[r.id] && mapB[r.id].toLowerCase() !== r.name.toLowerCase(),
+      )
       .map((r) => ({ id: r.id, nameInA: r.name, nameInB: mapB[r.id] }));
 
     setResults({ missingFromA, missingFromB, matched, nameMismatches });
@@ -402,14 +435,18 @@ export default function DataCompareApp() {
       <div style={styles.header}>
         <h1 style={styles.title}>Name-ID Mismatch Checker</h1>
         <p style={styles.subtitle}>
-          Compare Name and ID columns from two datasets to find missing, added, and changed values
+          Compare Name and ID columns from two datasets to find missing, added,
+          and changed values
         </p>
       </div>
 
       <div style={styles.grid}>
         <DropZone
           label="Spreadsheet A"
-          onFile={(rows) => { setDataA(rows); setResults(null); }}
+          onFile={(rows) => {
+            setDataA(rows);
+            setResults(null);
+          }}
           data={dataA}
           nameCol={nameA}
           idCol={idA}
@@ -417,7 +454,10 @@ export default function DataCompareApp() {
         />
         <DropZone
           label="Spreadsheet B"
-          onFile={(rows) => { setDataB(rows); setResults(null); }}
+          onFile={(rows) => {
+            setDataB(rows);
+            setResults(null);
+          }}
           data={dataB}
           nameCol={nameB}
           idCol={idB}
@@ -426,12 +466,23 @@ export default function DataCompareApp() {
       </div>
 
       {!ready && (dataA || dataB) && (
-        <div style={{ fontSize: 12, color: COLORS.muted, marginBottom: 16, textAlign: "center" }}>
+        <div
+          style={{
+            fontSize: 12,
+            color: COLORS.muted,
+            marginBottom: 16,
+            textAlign: "center",
+          }}
+        >
           Select Name and ID columns for both spreadsheets to continue
         </div>
       )}
 
-      <button style={styles.compareBtn(!ready)} onClick={compare} disabled={!ready}>
+      <button
+        style={styles.compareBtn(!ready)}
+        onClick={compare}
+        disabled={!ready}
+      >
         {ready ? "Compare Data →" : "Upload & configure both spreadsheets"}
       </button>
 
@@ -439,23 +490,33 @@ export default function DataCompareApp() {
         <>
           <div style={styles.summaryBar}>
             <div style={styles.stat}>
-              <span style={{ ...styles.statVal, color: COLORS.green }}>{results.matched.length}</span>
+              <span style={{ ...styles.statVal, color: COLORS.green }}>
+                {results.matched.length}
+              </span>
               <span style={styles.statLabel}>Matched</span>
             </div>
             <div style={{ width: 1, height: 36, background: COLORS.border }} />
             <div style={styles.stat}>
-              <span style={{ ...styles.statVal, color: COLORS.red }}>{results.missingFromA.length}</span>
+              <span style={{ ...styles.statVal, color: COLORS.red }}>
+                {results.missingFromA.length}
+              </span>
               <span style={styles.statLabel}>Missing from A</span>
             </div>
             <div style={styles.stat}>
-              <span style={{ ...styles.statVal, color: COLORS.red }}>{results.missingFromB.length}</span>
+              <span style={{ ...styles.statVal, color: COLORS.red }}>
+                {results.missingFromB.length}
+              </span>
               <span style={styles.statLabel}>Missing from B</span>
             </div>
             {results.nameMismatches.length > 0 && (
               <>
-                <div style={{ width: 1, height: 36, background: COLORS.border }} />
+                <div
+                  style={{ width: 1, height: 36, background: COLORS.border }}
+                />
                 <div style={styles.stat}>
-                  <span style={{ ...styles.statVal, color: COLORS.accent }}>{results.nameMismatches.length}</span>
+                  <span style={{ ...styles.statVal, color: COLORS.accent }}>
+                    {results.nameMismatches.length}
+                  </span>
                   <span style={styles.statLabel}>Name mismatches</span>
                 </div>
               </>
@@ -465,19 +526,12 @@ export default function DataCompareApp() {
           <div style={styles.resultsGrid}>
             <div style={styles.resultCard(COLORS.red)}>
               <div style={styles.cardHeader(COLORS.red)}>
-                <span style={{ ...styles.cardTitle, color: COLORS.red }}>In B, not in A</span>
-                <span style={styles.badge(COLORS.red)}>{results.missingFromA.length}</span>
-              </div>
-              <ResultTable
-                rows={results.missingFromA}
-                color={COLORS.red}
-                emptyMsg="Spreadsheet A has everyone in B"
-              />
-            </div>
-            <div style={styles.resultCard(COLORS.red)}>
-              <div style={styles.cardHeader(COLORS.red)}>
-                <span style={{ ...styles.cardTitle, color: COLORS.red }}>In A, not in B</span>
-                <span style={styles.badge(COLORS.red)}>{results.missingFromB.length}</span>
+                <span style={{ ...styles.cardTitle, color: COLORS.red }}>
+                  In A, not in B
+                </span>
+                <span style={styles.badge(COLORS.red)}>
+                  {results.missingFromB.length}
+                </span>
               </div>
               <ResultTable
                 rows={results.missingFromB}
@@ -485,12 +539,36 @@ export default function DataCompareApp() {
                 emptyMsg="Spreadsheet B has everyone in A"
               />
             </div>
+            <div style={styles.resultCard(COLORS.red)}>
+              <div style={styles.cardHeader(COLORS.red)}>
+                <span style={{ ...styles.cardTitle, color: COLORS.red }}>
+                  In B, not in A
+                </span>
+                <span style={styles.badge(COLORS.red)}>
+                  {results.missingFromA.length}
+                </span>
+              </div>
+              <ResultTable
+                rows={results.missingFromA}
+                color={COLORS.red}
+                emptyMsg="Spreadsheet A has everyone in B"
+              />
+            </div>
           </div>
 
           {results.nameMismatches.length > 0 && (
             <div style={styles.matchBlock}>
-              <div style={{ ...styles.cardTitle, color: COLORS.accent, marginBottom: 12 }}>
-                ⚠ Same ID, Different Name
+              <div
+                style={{
+                  ...styles.cardHeader(COLORS.accent),
+                  borderRadius: "8px 8px 0 0",
+                  marginBottom: 0,
+                  padding: "12px 16px",
+                }}
+              >
+                <span style={{ ...styles.cardTitle, color: COLORS.accent }}>
+                  ⚠ Same ID, Different Name
+                </span>
               </div>
               <table style={styles.table}>
                 <thead>
@@ -503,7 +581,15 @@ export default function DataCompareApp() {
                 <tbody>
                   {results.nameMismatches.map((r, i) => (
                     <tr key={i}>
-                      <td style={{ ...styles.td, color: COLORS.accent, fontFamily: "'DM Mono', monospace" }}>{r.id}</td>
+                      <td
+                        style={{
+                          ...styles.td,
+                          color: COLORS.accent,
+                          fontFamily: "'DM Mono', monospace",
+                        }}
+                      >
+                        {r.id}
+                      </td>
                       <td style={styles.td}>{r.nameInA}</td>
                       <td style={styles.td}>{r.nameInB}</td>
                     </tr>

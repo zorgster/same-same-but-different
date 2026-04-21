@@ -1,6 +1,7 @@
 const PACKAGE_LABELS = {
   annovar: "ANNOVAR",
   bcftools: "BCFtools",
+  dragen: "DRAGEN",
   freebayes: "FreeBayes",
   gatk: "GATK",
   picard: "Picard",
@@ -29,6 +30,9 @@ const SUBTOOL_LABELS = {
     sort: "Sort",
     stats: "Stats",
     view: "View",
+  },
+  dragen: {
+    hashtablebuild: "HashTableBuild",
   },
   gatk: {
     combinevariants: "CombineVariants",

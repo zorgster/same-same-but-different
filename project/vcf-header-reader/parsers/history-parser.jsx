@@ -135,11 +135,33 @@ function splitKeyValueToken(token) {
 function parseOptionTokens(text) {
   const tokens = tokenizeCommandText(text);
   const options = [];
+  const startsWithExecutable = tokens.length > 0 && !String(tokens[0] || "").startsWith("-") && !String(tokens[0] || "").includes("=");
 
-  for (const token of tokens) {
-    const pair = splitKeyValueToken(token);
-    if (!pair) continue;
-    options.push({ ...pair, source: "structured" });
+  for (let i = startsWithExecutable ? 1 : 0; i < tokens.length; i += 1) {
+    const token = String(tokens[i] || "").trim();
+    if (!token) continue;
+
+    if (token.startsWith("-") && token.includes("=")) {
+      const eq = token.indexOf("=");
+      options.push({ key: token.slice(0, eq), value: token.slice(eq + 1), source: "structured" });
+      continue;
+    }
+
+    if (token.startsWith("-")) {
+      const next = String(tokens[i + 1] || "").trim();
+      if (next && !next.startsWith("-")) {
+        options.push({ key: token, value: next, source: "structured" });
+        i += 1;
+      } else {
+        options.push({ key: token, value: null, source: "structured" });
+      }
+      continue;
+    }
+
+    if (token.includes("=")) {
+      const pair = splitKeyValueToken(token);
+      if (pair) options.push({ ...pair, source: "structured" });
+    }
   }
 
   return options;
@@ -197,6 +219,56 @@ function parseDashedCommandOptions(commandText) {
   return out;
 }
 
+function isTruthyOptionValue(value) {
+  if (value === null || value === undefined) return true;
+  const normalized = String(value).trim().toLowerCase();
+  return normalized !== "" && normalized !== "false" && normalized !== "0" && normalized !== "no" && normalized !== "off";
+}
+
+function inferDragenRunSignals({ key, tool, family, options, commandLineOptions }) {
+  const keyLower = String(key || "").toLowerCase();
+  const toolLower = String(tool || "").toLowerCase();
+  const familyLower = String(family || "").toLowerCase();
+  const rawLower = String(commandLineOptions || "").toLowerCase();
+
+  const isDragenEntry = familyLower === "dragen" || keyLower.startsWith("dragencommandline") || toolLower.includes("dragen");
+  if (!isDragenEntry) return [];
+
+  const valueByOptionKey = new Map();
+  for (const option of options || []) {
+    const optionKey = String(option?.key || "").trim().toLowerCase();
+    if (!optionKey) continue;
+    valueByOptionKey.set(optionKey, option?.value);
+  }
+
+  const hasEnabledOption = (optionKey) => {
+    const keyName = String(optionKey || "").trim().toLowerCase();
+    if (!keyName) return false;
+
+    if (valueByOptionKey.has(keyName)) {
+      return isTruthyOptionValue(valueByOptionKey.get(keyName));
+    }
+
+    // Fallback for compact or partially parsed raw command text.
+    const escaped = keyName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`${escaped}(?:\\s+|=)(true|1)\\b`, "i");
+    return pattern.test(rawLower);
+  };
+
+  const signals = [];
+  if (hasEnabledOption("--build-hash-table")) signals.push("Hash table build");
+  if (hasEnabledOption("--enable-variant-caller")) signals.push("Variant calling");
+  if (hasEnabledOption("--enable-map-align-output")) signals.push("Map/align output");
+  if (hasEnabledOption("--enable-metrics-compression")) signals.push("Metrics compression");
+  if (hasEnabledOption("--cnv-enable-self-normalization")) signals.push("CNV self-normalization");
+  if (hasEnabledOption("--enable-duplicate-marking")) signals.push("Duplicate marking");
+  if (hasEnabledOption("--enable-cnv")) signals.push("CNV calling");
+  if (hasEnabledOption("--enable-sv")) signals.push("SV calling");
+  if (hasEnabledOption("--repeat-genotype-enable")) signals.push("STR calling");
+
+  return Array.from(new Set(signals));
+}
+
 function resolveHistoryToolLabel(key, rawVal, structured = null) {
   const keyLower = String(key || "").toLowerCase();
   const val = normalizeCommandValue(rawVal);
@@ -226,6 +298,15 @@ function resolveHistoryToolLabel(key, rawVal, structured = null) {
     if (id) return formatToolLabel("gatk", id);
     const suffix = key.includes(".") ? key.slice(key.indexOf(".") + 1).trim() : "";
     return suffix ? formatToolLabel("gatk", suffix) : formatPackageLabel("gatk");
+  }
+
+  if (keyLower.startsWith("dragencommandline")) {
+    if (id && id.toLowerCase() !== "dragen") return formatToolLabel("dragen", id);
+
+    const suffix = key.includes(".") ? key.slice(key.indexOf(".") + 1).trim() : "";
+    if (suffix && suffix.toLowerCase() !== "dragen") return formatToolLabel("dragen", suffix);
+
+    return formatPackageLabel("dragen");
   }
 
   if (keyLower.endsWith("version")) {
@@ -310,6 +391,7 @@ function parseHistoryEntry(key, rawVal) {
     : keyLower === "vep"
       ? (vepMetadata?.options || [])
       : parseDashedCommandOptions(commandLine || withTrailingDate.text);
+  const runSignals = inferDragenRunSignals({ key, tool, family, options, commandLineOptions });
 
   const structuredExtras = structured
     ? Object.entries(structured)
@@ -330,6 +412,7 @@ function parseHistoryEntry(key, rawVal) {
     commandLine,
     commandLineOptions,
     options,
+    runSignals,
     structuredExtras,
     raw: normalizedVal,
     mergeBase: mergeSignature.base,
@@ -384,6 +467,7 @@ function mergeHistoryEntries(entries) {
       commandLine: existing.commandLine || entry.commandLine,
       commandLineOptions: existing.commandLineOptions || entry.commandLineOptions,
       options: existing.options.length ? existing.options : entry.options,
+      runSignals: Array.from(new Set([...(existing.runSignals || []), ...(entry.runSignals || [])])),
       structuredExtras: existing.structuredExtras.length ? existing.structuredExtras : entry.structuredExtras,
       raw: existing.raw || entry.raw,
       mergeBase: existing.mergeBase || entry.mergeBase,
@@ -412,7 +496,7 @@ function extractHistoryFromKeyValueEntries(entries) {
     "filedate",
     "fileformat",
   ]);
-  const toolHintRegex = /(gatk|bcftools|mutect|freebayes|picard|samtools|vep|snpeff|snpsift|genotypegvcfs|combinevariants|haplotypecaller)/i;
+  const toolHintRegex = /(gatk|bcftools|mutect|freebayes|picard|samtools|vep|snpeff|snpsift|dragen|genotypegvcfs|combinevariants|haplotypecaller)/i;
 
   for (const pair of entries || []) {
     const key = String(pair?.key || "").trim();

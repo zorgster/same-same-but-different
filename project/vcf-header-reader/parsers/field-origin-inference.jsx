@@ -32,6 +32,69 @@ const TOOL_FIELD_SIGNATURES = [
     other: [],
   },
   {
+    key: "dragen-hashtablebuild",
+    label: "DRAGEN HashTableBuild",
+    info: [],
+    format: [],
+    filter: [],
+    other: [],
+  },
+  {
+    key: "dragen-snv-indel",
+    label: "DRAGEN SNV/indel",
+    info: ["DP", "DB", "LOD"],
+    format: ["GT", "GQ", "AD", "DP", "VF", "NL", "SB", "PS"],
+    filter: [
+      "PASS",
+      "LowDP",
+      "LowDepth",
+      "LowGQ",
+      "LowVariantFreq",
+      "SB",
+      "R8",
+      "MultiAllelicSite",
+      "ForcedReport",
+      "DRAGENSnpHardQUAL",
+      "DRAGENIndelHardQUAL",
+      "PloidyConflict",
+      "base_quality",
+      "lod_fstar",
+    ],
+    other: [],
+  },
+  {
+    key: "dragen-somatic",
+    label: "DRAGEN Somatic",
+    info: ["DP", "AF", "DB", "COSMIC", "GermlineStatus"],
+    format: ["GT", "DP", "AF", "SQ"],
+    filter: ["PASS", "LowDP", "base_quality", "strand_artifact", "filtered_reads", "systematic_noise"],
+    other: [],
+  },
+  {
+    key: "dragen-sv",
+    label: "DRAGEN SV",
+    info: ["SVTYPE", "SVLEN", "END", "CIPOS", "CIEND", "MATEID", "SVCLAIM", "MatchSv"],
+    format: ["SR", "PR", "PE"],
+    filter: [],
+    other: [],
+  },
+  {
+    key: "dragen-cnv",
+    label: "DRAGEN CNV",
+    info: ["SVTYPE", "SVLEN", "END", "REFLEN", "SVCLAIM", "SEGID", "MOSAIC", "HET", "ModelSource"],
+    format: ["CN", "SM", "BC", "GC", "CT", "AC", "PE", "TCN", "MCN", "TCNQ"],
+    filter: ["cnvLength", "cnvQual", "cnvBinSupportRatio", "cnvCopyRatio"],
+    other: ["CoverageUniformity"],
+  },
+  {
+    key: "dragen-str",
+    label: "DRAGEN STR",
+    info: ["RU", "REFREP"],
+    format: ["LCOV"],
+    filter: [],
+    other: [],
+  },
+  {
     key: "bcftools-mpileup",
     label: "BCFtools Mpileup",
     info: ["AD", "ADF", "ADR", "BQBZ", "DP", "DPR", "FS", "I16", "IDV", "IMF", "MQ0F", "MQBZ", "MQSBZ", "NM", "NMBZ", "QS", "RPBZ", "SCBZ", "SCR", "SGB", "VDB", "INDEL"],
@@ -61,6 +124,13 @@ function normalizeText(value) {
   return String(value || "").toLowerCase();
 }
 
+function hasEnabledFlag(blob, flagName) {
+  const key = String(flagName || "").toLowerCase();
+  if (!key) return false;
+
+  return blob.includes(`${key} true`) || blob.includes(`${key}=true`) || blob.includes(`${key} 1`) || blob.includes(`${key}=1`);
+}
+
 function detectActiveToolSignals(historyEntries) {
   const signals = new Set();
 
@@ -77,7 +147,34 @@ function detectActiveToolSignals(historyEntries) {
       ].join(" ")
     );
 
+    const hasDragen = blob.includes("dragen");
+    const hasHashTableBuild = blob.includes("hashtablebuild") || hasEnabledFlag(blob, "--build-hash-table");
+    const hasSomaticMode = blob.includes("--tumor-bam-input") || blob.includes("--vc-enable-germline-tagging") || blob.includes("--somatic-sys-noise-file");
+    const hasSvMode = hasEnabledFlag(blob, "--enable-sv");
+    const hasCnvMode = hasEnabledFlag(blob, "--enable-cnv");
+    const hasStrMode = hasEnabledFlag(blob, "--repeat-genotype-enable");
+    const hasRnaHash = hasEnabledFlag(blob, "--ht-build-rna-hashtable");
+    const hasHlaHash = hasEnabledFlag(blob, "--ht-build-hla-hashtable");
+    const hasVariantCaller = hasEnabledFlag(blob, "--enable-variant-caller");
+
     if (blob.includes("mutect2") || blob.includes(" mutect ")) signals.add("mutect2");
+    if (hasDragen && hasHashTableBuild) signals.add("dragen-hashtablebuild");
+    if (hasDragen && hasVariantCaller && !hasSomaticMode) signals.add("dragen-snv-indel");
+    if (hasDragen && hasSomaticMode) signals.add("dragen-somatic");
+    if (hasDragen && hasSvMode) signals.add("dragen-sv");
+    if (hasDragen && hasCnvMode) signals.add("dragen-cnv");
+    if (hasDragen && hasStrMode) signals.add("dragen-str");
+
+    // Hash table build can carry mode intent flags in compact histories.
+    if (hasDragen && hasHashTableBuild && hasCnvMode) signals.add("dragen-cnv");
+    if (hasDragen && hasHashTableBuild && hasRnaHash) signals.add("dragen-snv-indel");
+    if (hasDragen && hasHashTableBuild && hasHlaHash) signals.add("dragen-snv-indel");
+
+    if (hasDragen && !hasVariantCaller && !hasSomaticMode && !hasSvMode && !hasCnvMode && !hasStrMode && !hasHashTableBuild) {
+      // Fallback for very sparse DRAGEN histories: still attribute germline hard-filter fields.
+      signals.add("dragen-snv-indel");
+    }
+
     if (blob.includes("freebayes")) signals.add("freebayes");
     if (blob.includes("selectvariants")) signals.add("gatk-selectvariants");
     if (blob.includes("combinevariants")) signals.add("gatk-combinevariants");
@@ -124,6 +221,10 @@ function inferFieldProducers(field, scope, activeSignals) {
   const producers = [];
   const activeMatches = getMatchingActiveToolLabels(id, scope, activeSignals);
   if (activeMatches.length) producers.push(...activeMatches);
+
+  if (scope === "FILTER" && /^Q\d+$/.test(id) && activeSignals.has("dragen-snv-indel")) {
+    producers.push("DRAGEN SNV/indel");
+  }
 
   const descLower = description.toLowerCase();
   if (/annotation from\s+|\bvcfanno\b|\bbed\b/i.test(descLower)) {

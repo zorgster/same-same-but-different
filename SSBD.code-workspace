@@ -1,0 +1,23 @@
+{
+  "folders": [
+    {
+      "path": ".",
+    },
+  ],
+  "settings": {
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "esbenp.prettier-vscode",
+    "eslint.validate": [
+      "javascript",
+      "javascriptreact",
+      "typescript",
+      "typescriptreact",
+    ],
+    "search.exclude": {
+      "node_modules": true,
+      "dist": true,
+      "build": true,
+    },
+    "js/ts.validate.enabled": true,
+  },
+}

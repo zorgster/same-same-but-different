@@ -2,15 +2,15 @@ import { useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 
 const COLORS = {
-  bg: "#0f1117",
-  surface: "#1a1d27",
-  border: "#2a2d3e",
-  accent: "#0ea5a3",
-  accentDim: "#0ea5a322",
+  bg: "#f8f9fb",
+  surface: "#fff",
+  border: "#e0e3eb",
+  accent: "#f0a500",
+  accentDim: "#fff7e0",
   red: "#e05c5c",
   green: "#4caf88",
-  text: "#e8eaf0",
-  muted: "#6b7080",
+  text: "#222",
+  muted: "#7b7e8b",
 };
 
 const styles = {
@@ -75,6 +75,10 @@ const styles = {
     gap: 8,
     alignItems: "center",
     fontSize: 13,
+    background: COLORS.accentDim,
+    color: COLORS.text,
+    boxShadow: "0 1px 2px 0 #0001",
+    transition: "background 0.2s, color 0.2s",
   },
   stats: {
     display: "grid",
@@ -85,7 +89,9 @@ const styles = {
     border: `1px solid ${COLORS.border}`,
     borderRadius: 10,
     padding: 12,
-    background: "#151924",
+    background: COLORS.surface,
+    color: COLORS.text,
+    boxShadow: "0 1px 2px 0 #0001",
   },
   statValue: {
     fontSize: 20,
@@ -168,7 +174,7 @@ function levenshteinDistance(a, b) {
       dp[i][j] = Math.min(
         dp[i - 1][j] + 1,
         dp[i][j - 1] + 1,
-        dp[i - 1][j - 1] + cost
+        dp[i - 1][j - 1] + cost,
       );
     }
   }
@@ -191,7 +197,10 @@ function isLikelyDomainTypo(domain, dominantDomain) {
 function getHeaderPriority(headerText) {
   const header = String(headerText || "").toLowerCase();
   if (/name/.test(header)) return 5;
-  if (/(id|identifier|employee|student|staff|person|number|ref|uid)/.test(header)) return 4;
+  if (
+    /(id|identifier|employee|student|staff|person|number|ref|uid)/.test(header)
+  )
+    return 4;
   if (/(class|group|team|code)/.test(header)) return 3;
   return 1;
 }
@@ -234,7 +243,10 @@ function parseSpreadsheet(file) {
         const bytes = new Uint8Array(event.target.result);
         const workbook = XLSX.read(bytes, { type: "array" });
         const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" });
+        const rows = XLSX.utils.sheet_to_json(worksheet, {
+          header: 1,
+          defval: "",
+        });
         resolve(rows);
       } catch (error) {
         reject(error);
@@ -243,6 +255,100 @@ function parseSpreadsheet(file) {
     reader.onerror = reject;
     reader.readAsArrayBuffer(file);
   });
+}
+
+// Minimal DropZone for Email Validator (no column selectors)
+function DropZone({ label, onFile, data }) {
+  const [drag, setDrag] = useState(false);
+  const [fileName, setFileName] = useState(null);
+
+  const handleDrop = async (e) => {
+    e.preventDefault();
+    setDrag(false);
+    const file = e.dataTransfer.files[0];
+    if (!file) return;
+    setFileName(file.name);
+    const rows = await parseSpreadsheet(file);
+    onFile(rows, file.name);
+  };
+
+  const handleChange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setFileName(file.name);
+    const rows = await parseSpreadsheet(file);
+    onFile(rows, file.name);
+  };
+
+  const rowCount = data ? data.length - 1 : 0;
+
+  return (
+    <div
+      style={{
+        border: `2px dashed ${drag ? COLORS.accent : COLORS.border}`,
+        borderRadius: 12,
+        padding: "28px 20px",
+        textAlign: "center",
+        cursor: "pointer",
+        transition: "all 0.2s",
+        background: drag ? COLORS.accentDim : COLORS.surface,
+        position: "relative",
+        marginBottom: 16,
+      }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        setDrag(true);
+      }}
+      onDragLeave={() => setDrag(false)}
+      onDrop={handleDrop}
+    >
+      <label style={{ cursor: "pointer", display: "block" }}>
+        <span
+          style={{
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: "1.5px",
+            textTransform: "uppercase",
+            color: COLORS.accent,
+            marginBottom: 10,
+            display: "block",
+          }}
+        >
+          {label}
+        </span>
+        <input
+          type="file"
+          accept=".xlsx,.xls,.csv"
+          style={{ display: "none" }}
+          onChange={handleChange}
+        />
+        {!fileName ? (
+          <p style={{ fontSize: 13, color: COLORS.muted, margin: 0 }}>
+            Drop your spreadsheet here
+            <br />
+            <span style={{ fontSize: 11 }}>Excel or CSV · click to browse</span>
+          </p>
+        ) : (
+          <>
+            <div
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                color: COLORS.text,
+                marginTop: 8,
+                wordBreak: "break-all",
+              }}
+            >
+              📄 {fileName}
+            </div>
+            <div style={{ fontSize: 12, color: COLORS.green, marginTop: 4 }}>
+              ✓ {rowCount} rows loaded
+            </div>
+          </>
+        )}
+      </label>
+    </div>
+  );
 }
 
 export default function EmailValidatorApp() {
@@ -272,7 +378,9 @@ export default function EmailValidatorApp() {
   const toggleCol = (idx) => {
     setResult(null);
     setSelectedCols((current) =>
-      current.includes(idx) ? current.filter((value) => value !== idx) : [...current, idx]
+      current.includes(idx)
+        ? current.filter((value) => value !== idx)
+        : [...current, idx],
     );
   };
 
@@ -326,8 +434,8 @@ export default function EmailValidatorApp() {
       domainFrequency[domain] = (domainFrequency[domain] || 0) + 1;
     }
 
-    const dominantDomain = Object.entries(domainFrequency)
-      .sort((a, b) => b[1] - a[1])[0]?.[0] || "";
+    const dominantDomain =
+      Object.entries(domainFrequency).sort((a, b) => b[1] - a[1])[0]?.[0] || "";
 
     for (const item of candidates) {
       if (!isValidEmail(item.value)) {
@@ -342,7 +450,11 @@ export default function EmailValidatorApp() {
       }
 
       const domain = getDomain(item.value);
-      if (domainCheckMode && dominantDomain && isLikelyDomainTypo(domain, dominantDomain)) {
+      if (
+        domainCheckMode &&
+        dominantDomain &&
+        isLikelyDomainTypo(domain, dominantDomain)
+      ) {
         domainIssues.push({
           rowNumber: item.rowNumber,
           columnName: item.columnName,
@@ -373,18 +485,21 @@ export default function EmailValidatorApp() {
       <div style={styles.header}>
         <h1 style={styles.title}>Email Validator</h1>
         <p style={styles.subtitle}>
-          Upload one spreadsheet, select email columns, and validate email formatting.
+          Upload one spreadsheet, select email columns, and validate email
+          formatting.
         </p>
       </div>
 
-      <div style={styles.card}>
-        <div style={styles.fileInputWrap}>
-          <input type="file" accept=".xlsx,.xls,.csv" onChange={onFileChange} />
-          <div style={{ marginTop: 8, fontSize: 12, color: COLORS.muted }}>
-            {fileName || "No file selected"}
-          </div>
-        </div>
-      </div>
+      <DropZone
+        label="Upload Spreadsheet"
+        onFile={async (rows, name) => {
+          setRows(rows);
+          setFileName(name);
+          setSelectedCols([]);
+          setResult(null);
+        }}
+        data={rows}
+      />
 
       {headers.length > 0 && (
         <div style={styles.card}>
@@ -405,7 +520,9 @@ export default function EmailValidatorApp() {
           </div>
 
           <div style={{ marginTop: 14 }}>
-            <label style={{ ...styles.headerItem, marginBottom: 10, maxWidth: 320 }}>
+            <label
+              style={{ ...styles.headerItem, marginBottom: 10, maxWidth: 320 }}
+            >
               <input
                 type="checkbox"
                 checked={strictMode}
@@ -414,12 +531,12 @@ export default function EmailValidatorApp() {
                   setResult(null);
                 }}
               />
-              <span>
-                Strict mode: treat blank email cells as invalid
-              </span>
+              <span>Strict mode: treat blank email cells as invalid</span>
             </label>
 
-            <label style={{ ...styles.headerItem, marginBottom: 10, maxWidth: 420 }}>
+            <label
+              style={{ ...styles.headerItem, marginBottom: 10, maxWidth: 420 }}
+            >
               <input
                 type="checkbox"
                 checked={domainCheckMode}
@@ -429,7 +546,8 @@ export default function EmailValidatorApp() {
                 }}
               />
               <span>
-                Domain consistency check: flag domains that look like typos of the dominant domain
+                Domain consistency check: flag domains that look like typos of
+                the dominant domain
               </span>
             </label>
 
@@ -449,23 +567,33 @@ export default function EmailValidatorApp() {
           <div style={styles.card}>
             <div style={styles.stats}>
               <div style={styles.statCard}>
-                <div style={{ ...styles.statValue, color: COLORS.text }}>{result.checkedCount}</div>
+                <div style={{ ...styles.statValue, color: COLORS.text }}>
+                  {result.checkedCount}
+                </div>
                 <div style={styles.statLabel}>Checked emails</div>
               </div>
               <div style={styles.statCard}>
-                <div style={{ ...styles.statValue, color: COLORS.green }}>{result.validCount}</div>
+                <div style={{ ...styles.statValue, color: COLORS.green }}>
+                  {result.validCount}
+                </div>
                 <div style={styles.statLabel}>Valid</div>
               </div>
               <div style={styles.statCard}>
-                <div style={{ ...styles.statValue, color: COLORS.red }}>{result.formatIssueCount}</div>
+                <div style={{ ...styles.statValue, color: COLORS.red }}>
+                  {result.formatIssueCount}
+                </div>
                 <div style={styles.statLabel}>Format errors</div>
               </div>
               <div style={styles.statCard}>
-                <div style={{ ...styles.statValue, color: COLORS.red }}>{result.domainIssueCount}</div>
+                <div style={{ ...styles.statValue, color: COLORS.red }}>
+                  {result.domainIssueCount}
+                </div>
                 <div style={styles.statLabel}>Domain typos</div>
               </div>
               <div style={styles.statCard}>
-                <div style={{ ...styles.statValue, color: COLORS.muted }}>{result.blankCount}</div>
+                <div style={{ ...styles.statValue, color: COLORS.muted }}>
+                  {result.blankCount}
+                </div>
                 <div style={styles.statLabel}>Blank cells</div>
               </div>
             </div>
@@ -482,13 +610,15 @@ export default function EmailValidatorApp() {
                 : " No dominant domain detected."}
             </div>
             <div style={{ marginTop: 6, fontSize: 12, color: COLORS.muted }}>
-              Format errors are checked first; domain consistency is a second pass for near-miss typos.
+              Format errors are checked first; domain consistency is a second
+              pass for near-miss typos.
             </div>
           </div>
 
           <div style={styles.card}>
             <div style={{ marginBottom: 10, fontWeight: 700 }}>
-              Invalid email values {result.invalidCount === 0 ? "(none found)" : ""}
+              Invalid email values{" "}
+              {result.invalidCount === 0 ? "(none found)" : ""}
             </div>
 
             {result.invalidCount > 0 ? (
@@ -510,7 +640,9 @@ export default function EmailValidatorApp() {
                         <td style={styles.td}>{issue.identifier}</td>
                         <td style={styles.td}>{issue.columnName}</td>
                         <td style={styles.td}>{issue.issueType}</td>
-                        <td style={{ ...styles.td, color: COLORS.red }}>{issue.value}</td>
+                        <td style={{ ...styles.td, color: COLORS.red }}>
+                          {issue.value}
+                        </td>
                       </tr>
                     ))}
                   </tbody>

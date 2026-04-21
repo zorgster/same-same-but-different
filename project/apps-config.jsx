@@ -3,6 +3,7 @@ import EmailValidatorApp from "./email-validator.jsx";
 import VcfHeaderReaderApp from "./vcf-header-reader/VcfHeaderReaderApp.jsx";
 import DnaFileComparatorApp from "./array_raw_data_comparator/dna-file-comparator.jsx";
 import GeneticDistanceCalculatorApp from "./genetic-distance-calculator/genetic-distance-calculator.jsx";
+import TableInspectorApp from "./table-inspector.jsx";
 
 export const APPS = [
   {
@@ -22,6 +23,13 @@ export const APPS = [
         desc: "Upload one file, select email columns, and validate email formatting",
         status: "live",
         component: EmailValidatorApp,
+      },
+      {
+        id: "table-inspector",
+        name: "Table inspector",
+        desc: "Inspect and validate table structures and data integrity",
+        status: "beta",
+        component: TableInspectorApp,
       },
       {
         id: "masterlist-merge",

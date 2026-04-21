@@ -82,15 +82,39 @@ const TABLE_PAGER_BUTTON_STYLE = {
   fontSize: 12,
 };
 
+const CM_DELTA_ALERT_THRESHOLD = 0.1;
+const MAT_PAT_IMBALANCE_THRESHOLD = 0.15;
+
 function toNumber(value) {
   const n = Number(value);
   return Number.isFinite(n) ? n : null;
+}
+
+function toOptionalNumber(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  return toNumber(text);
 }
 
 function formatCellDecimal(value, decimals = 4) {
   const numeric = toNumber(String(value ?? "").replace(/,/g, ""));
   if (numeric === null) return String(value ?? "");
   return numeric.toFixed(decimals);
+}
+
+function chromosomeSortValue(raw) {
+  const text = String(raw || "").trim().toLowerCase();
+  const clean = text.startsWith("chr") ? text.slice(3) : text;
+
+  if (/^\d+$/.test(clean)) return Number(clean);
+  if (clean === "x") return 23;
+  if (clean === "y") return 24;
+  if (clean === "m" || clean === "mt") return 25;
+  return Number.MAX_SAFE_INTEGER;
+}
+
+function normalizeChromosomeText(value) {
+  return String(value || "").trim().toLowerCase();
 }
 
 function detectDelimiter(headerLine) {
@@ -315,6 +339,8 @@ export default function GeneticDistanceCalculatorApp() {
   const [columnMap, setColumnMap] = useState({ name: "", snps: "", chr: "", start: "", end: "", existingCm: "" });
   const [tablePage, setTablePage] = useState(1);
   const [tablePageSize, setTablePageSize] = useState(25);
+  const [tableFilters, setTableFilters] = useState({ chr: "", startMb: "", endMb: "" });
+  const [tableSort, setTableSort] = useState({ key: "chr", dir: "asc" });
 
   useEffect(() => {
     let active = true;
@@ -393,7 +419,12 @@ export default function GeneticDistanceCalculatorApp() {
     const inferredEnd = pick([/^end$/, /end[_\s-]?pos/, /^to$/]) || (chrIndex >= 0 ? pickAdjacent(chrIndex, 2) : "");
 
     setColumnMap({
-      name: pick([/^name$/, /^display[_\s-]?name$/, /full[_\s-]?name/, /person|sample/]),
+      name:
+        pick([/^match[_\s-]?name$/]) ||
+        pick([/^display[_\s-]?name$/]) ||
+        pick([/^full[_\s-]?name$/]) ||
+        pick([/^name$/]) ||
+        pick([/person|sample/]),
       snps: pick([/#?snps?/, /snp[_\s-]?count/, /total[_\s-]?snps?/]),
       chr: inferredChr,
       start: inferredStart,
@@ -458,6 +489,7 @@ export default function GeneticDistanceCalculatorApp() {
       setTableRows(parsed.rows);
       setMode("table");
       setTablePage(1);
+      setTableFilters({ chr: "", startMb: "", endMb: "" });
     } catch (error) {
       setTableError(String(error?.message || "Could not parse uploaded file."));
     }
@@ -510,13 +542,82 @@ export default function GeneticDistanceCalculatorApp() {
     });
   }, [mode, columnMap, tableRows, maps]);
 
-  const totalTableRows = tableComputedRows.length;
+  const tableChromosomeOptions = useMemo(() => {
+    const unique = new Set();
+
+    for (const row of tableComputedRows) {
+      const value = String(row.chr || "").trim();
+      if (value) unique.add(value);
+    }
+
+    return Array.from(unique).sort((a, b) => {
+      const av = chromosomeSortValue(a);
+      const bv = chromosomeSortValue(b);
+      if (av !== bv) return av - bv;
+      return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
+    });
+  }, [tableComputedRows]);
+
+  useEffect(() => {
+    if (!tableFilters.chr) return;
+
+    const selected = normalizeChromosomeText(tableFilters.chr);
+    const stillExists = tableChromosomeOptions.some((option) => normalizeChromosomeText(option) === selected);
+    if (!stillExists) {
+      setTableFilters((prev) => ({ ...prev, chr: "" }));
+    }
+  }, [tableChromosomeOptions, tableFilters.chr]);
+
+  const filteredSortedRows = useMemo(() => {
+    const chrFilter = normalizeChromosomeText(tableFilters.chr);
+    const startMinMb = toOptionalNumber(tableFilters.startMb);
+    const endMaxMb = toOptionalNumber(tableFilters.endMb);
+    const startMinBp = startMinMb !== null ? startMinMb * 1e6 : null;
+    const endMaxBp = endMaxMb !== null ? endMaxMb * 1e6 : null;
+
+    const filtered = tableComputedRows.filter((row) => {
+      const chrText = normalizeChromosomeText(row.chr);
+      const startBp = toNumber(String(row.start || "").replace(/,/g, ""));
+      const endBp = toNumber(String(row.end || "").replace(/,/g, ""));
+
+      if (chrFilter && chrText !== chrFilter) return false;
+      if (startMinBp !== null && (startBp === null || startBp < startMinBp)) return false;
+      if (endMaxBp !== null && (endBp === null || endBp > endMaxBp)) return false;
+
+      return true;
+    });
+
+    const dirFactor = tableSort.dir === "desc" ? -1 : 1;
+    const sorted = [...filtered].sort((a, b) => {
+      if (tableSort.key === "chr") {
+        const av = chromosomeSortValue(a.chr);
+        const bv = chromosomeSortValue(b.chr);
+        if (av !== bv) return (av - bv) * dirFactor;
+        return String(a.chr || "").localeCompare(String(b.chr || "")) * dirFactor;
+      }
+
+      if (tableSort.key === "start" || tableSort.key === "end") {
+        const av = toNumber(String(a[tableSort.key] || "").replace(/,/g, ""));
+        const bv = toNumber(String(b[tableSort.key] || "").replace(/,/g, ""));
+        if (av === null && bv === null) return 0;
+        if (av === null) return 1;
+        if (bv === null) return -1;
+        return (av - bv) * dirFactor;
+      }
+
+      return 0;
+    });
+
+    return sorted;
+  }, [tableComputedRows, tableFilters, tableSort]);
+
+  const totalTableRows = filteredSortedRows.length;
   const totalTablePages = Math.max(1, Math.ceil(totalTableRows / tablePageSize));
   const safeTablePage = Math.min(Math.max(tablePage, 1), totalTablePages);
   const pagedTableRows = useMemo(() => {
     const startIndex = (safeTablePage - 1) * tablePageSize;
-    return tableComputedRows.slice(startIndex, startIndex + tablePageSize);
-  }, [safeTablePage, tablePageSize, tableComputedRows]);
+    return filteredSortedRows.slice(startIndex, startIndex + tablePageSize);
+  }, [safeTablePage, tablePageSize, filteredSortedRows]);
 
   useEffect(() => {
     if (mode !== "table") {
@@ -529,6 +630,24 @@ export default function GeneticDistanceCalculatorApp() {
       return nextPage;
     });
   }, [mode, totalTablePages]);
+
+  useEffect(() => {
+    if (mode === "table") setTablePage(1);
+  }, [mode, tableFilters, tableSort, tablePageSize]);
+
+  function toggleTableSort(key) {
+    setTableSort((prev) => {
+      if (prev.key === key) {
+        return { key, dir: prev.dir === "asc" ? "desc" : "asc" };
+      }
+      return { key, dir: "asc" };
+    });
+  }
+
+  function sortLabel(key, label) {
+    if (tableSort.key !== key) return label;
+    return `${label} ${tableSort.dir === "asc" ? "↑" : "↓"}`;
+  }
 
   return (
     <section style={CARD_STYLE}>
@@ -681,35 +800,147 @@ export default function GeneticDistanceCalculatorApp() {
                     <tr style={{ background: "#f8fafc" }}>
                       {columnMap.name ? <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid #e2e8f0" }}>Name</th> : null}
                       {columnMap.snps ? <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid #e2e8f0" }}>#SNPs</th> : null}
-                      <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid #e2e8f0" }}>Chromosome</th>
-                      <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid #e2e8f0" }}>Start</th>
-                      <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid #e2e8f0" }}>End</th>
+                      <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid #e2e8f0" }}>
+                        <button
+                          type="button"
+                          onClick={() => toggleTableSort("chr")}
+                          style={{ border: 0, background: "transparent", padding: 0, margin: 0, cursor: "pointer", fontSize: 12, fontWeight: 700, color: "inherit" }}
+                        >
+                          {sortLabel("chr", "Chromosome")}
+                        </button>
+                      </th>
+                      <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid #e2e8f0" }}>
+                        <button
+                          type="button"
+                          onClick={() => toggleTableSort("start")}
+                          style={{ border: 0, background: "transparent", padding: 0, margin: 0, cursor: "pointer", fontSize: 12, fontWeight: 700, color: "inherit" }}
+                        >
+                          {sortLabel("start", "Start")}
+                        </button>
+                      </th>
+                      <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid #e2e8f0" }}>
+                        <button
+                          type="button"
+                          onClick={() => toggleTableSort("end")}
+                          style={{ border: 0, background: "transparent", padding: 0, margin: 0, cursor: "pointer", fontSize: 12, fontWeight: 700, color: "inherit" }}
+                        >
+                          {sortLabel("end", "End")}
+                        </button>
+                      </th>
                       {columnMap.existingCm ? <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid #e2e8f0" }}>Existing cM</th> : null}
-                      <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid #e2e8f0", borderLeft: "2px solid #cbd5e1", background: "#eff6ff", color: "#1d4ed8" }}>Maternal cM</th>
-                      <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid #e2e8f0", background: "#eff6ff", color: "#1d4ed8" }}>Paternal cM</th>
-                      <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid #e2e8f0", background: "#eff6ff", color: "#1d4ed8" }}>Averaged cM</th>
+                      <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid #e2e8f0", borderLeft: "2px solid #cbd5e1", background: "#eff6ff", color: "#334155" }}>Maternal cM</th>
+                      <th style={{ textAlign: "center", padding: "8px 4px", borderBottom: "1px solid #e2e8f0", background: "#eff6ff", color: "#334155", width: 24 }}> </th>
+                      <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid #e2e8f0", background: "#eff6ff", color: "#334155" }}>Paternal cM</th>
+                      <th style={{ textAlign: "left", padding: "8px 10px", borderBottom: "1px solid #e2e8f0", background: "#eff6ff", color: "#334155" }}>Averaged cM</th>
+                    </tr>
+                    <tr style={{ background: "#f8fafc" }}>
+                      {columnMap.name ? <th style={{ padding: "6px 10px", borderBottom: "1px solid #e2e8f0" }} /> : null}
+                      {columnMap.snps ? <th style={{ padding: "6px 10px", borderBottom: "1px solid #e2e8f0" }} /> : null}
+                      <th style={{ padding: "6px 10px", borderBottom: "1px solid #e2e8f0" }}>
+                        <select
+                          value={tableFilters.chr}
+                          onChange={(e) => setTableFilters((prev) => ({ ...prev, chr: e.target.value }))}
+                          style={{ width: "100%", fontSize: 12 }}
+                        >
+                          <option value="">All chromosomes</option>
+                          {tableChromosomeOptions.map((chrOption) => (
+                            <option key={chrOption} value={chrOption}>{chrOption}</option>
+                          ))}
+                        </select>
+                      </th>
+                      <th style={{ padding: "6px 10px", borderBottom: "1px solid #e2e8f0" }}>
+                        <input
+                          type="number"
+                          value={tableFilters.startMb}
+                          onChange={(e) => setTableFilters((prev) => ({ ...prev, startMb: e.target.value }))}
+                          style={{ width: "100%", fontSize: 12 }}
+                          placeholder="Min Mb"
+                        />
+                      </th>
+                      <th style={{ padding: "6px 10px", borderBottom: "1px solid #e2e8f0" }}>
+                        <input
+                          type="number"
+                          value={tableFilters.endMb}
+                          onChange={(e) => setTableFilters((prev) => ({ ...prev, endMb: e.target.value }))}
+                          style={{ width: "100%", fontSize: 12 }}
+                          placeholder="Max Mb"
+                        />
+                      </th>
+                      {columnMap.existingCm ? <th style={{ padding: "6px 10px", borderBottom: "1px solid #e2e8f0" }} /> : null}
+                      <th style={{ padding: "6px 10px", borderBottom: "1px solid #e2e8f0", borderLeft: "2px solid #cbd5e1", background: "#eff6ff" }} />
+                      <th style={{ padding: "6px 4px", borderBottom: "1px solid #e2e8f0", background: "#eff6ff", width: 24 }} />
+                      <th style={{ padding: "6px 10px", borderBottom: "1px solid #e2e8f0", background: "#eff6ff" }} />
+                      <th style={{ padding: "6px 10px", borderBottom: "1px solid #e2e8f0", background: "#eff6ff" }} />
                     </tr>
                   </thead>
                   <tbody>
-                    {pagedTableRows.map((row, idx) => (
-                      <tr key={`row-${idx}`}>
-                        {columnMap.name ? <td style={{ padding: "7px 10px", borderBottom: "1px solid #eef2f7" }}>{row.name ?? ""}</td> : null}
-                        {columnMap.snps ? <td style={{ padding: "7px 10px", borderBottom: "1px solid #eef2f7" }}>{row.snps ?? ""}</td> : null}
-                        <td style={{ padding: "7px 10px", borderBottom: "1px solid #eef2f7" }}>{row.chr ?? ""}</td>
-                        <td style={{ padding: "7px 10px", borderBottom: "1px solid #eef2f7" }}>{row.start ?? ""}</td>
-                        <td style={{ padding: "7px 10px", borderBottom: "1px solid #eef2f7" }}>{row.end ?? ""}</td>
-                        {columnMap.existingCm ? <td style={{ padding: "7px 10px", borderBottom: "1px solid #eef2f7" }}>{row.existingCm ?? ""}</td> : null}
-                        <td style={{ padding: "7px 10px", borderBottom: "1px solid #eef2f7", borderLeft: "2px solid #cbd5e1", background: "#f8fbff", color: "#1d4ed8", fontWeight: 700 }}>{row.maternalCm == null ? "" : row.maternalCm.toFixed(4)}</td>
-                        <td style={{ padding: "7px 10px", borderBottom: "1px solid #eef2f7", background: "#f8fbff", color: "#1d4ed8", fontWeight: 700 }}>{row.paternalCm == null ? "" : row.paternalCm.toFixed(4)}</td>
-                        <td style={{ padding: "7px 10px", borderBottom: "1px solid #eef2f7", background: "#f8fbff", color: "#1d4ed8", fontWeight: 800 }}>{row.averagedCm == null ? "" : row.averagedCm.toFixed(4)}</td>
-                      </tr>
-                    ))}
+                    {pagedTableRows.map((row, idx) => {
+                      const existingNumeric = toOptionalNumber(String(row.existingCm || "").replace(/,/g, ""));
+                      const averageDelta =
+                        row.averagedCm !== null && existingNumeric !== null
+                          ? row.averagedCm - existingNumeric
+                          : null;
+                      const averageDeltaPct =
+                        averageDelta !== null && existingNumeric !== null && existingNumeric !== 0
+                          ? Math.abs(averageDelta / existingNumeric)
+                          : null;
+                      const showAverageDeltaWarning = Boolean(
+                        columnMap.existingCm &&
+                        averageDeltaPct !== null &&
+                        averageDeltaPct > CM_DELTA_ALERT_THRESHOLD
+                      );
+                      const averageColor =
+                        !showAverageDeltaWarning || averageDelta === null || averageDelta === 0
+                          ? "#334155"
+                          : averageDelta > 0
+                            ? "#b10020"
+                            : "#1d4ed8";
+                      const averageArrow =
+                        !showAverageDeltaWarning || averageDelta === null || averageDelta === 0
+                          ? ""
+                          : averageDelta > 0
+                            ? "↑"
+                            : "↓";
+                      const matPatDeltaFromAveragePct =
+                        row.maternalCm !== null && row.paternalCm !== null && row.averagedCm !== null && row.averagedCm !== 0
+                          ? Math.abs(row.maternalCm - row.averagedCm) / row.averagedCm
+                          : null;
+                      const showMatPatMarker = Boolean(
+                        matPatDeltaFromAveragePct !== null && matPatDeltaFromAveragePct > MAT_PAT_IMBALANCE_THRESHOLD
+                      );
+                      const matPatMarker =
+                        !showMatPatMarker
+                          ? ""
+                          : row.maternalCm > row.paternalCm
+                            ? ">>>"
+                            : "<<<";
+
+                      return (
+                        <tr key={`row-${idx}`}>
+                          {columnMap.name ? <td style={{ padding: "7px 10px", borderBottom: "1px solid #eef2f7" }}>{row.name ?? ""}</td> : null}
+                          {columnMap.snps ? <td style={{ padding: "7px 10px", borderBottom: "1px solid #eef2f7" }}>{row.snps ?? ""}</td> : null}
+                          <td style={{ padding: "7px 10px", borderBottom: "1px solid #eef2f7" }}>{row.chr ?? ""}</td>
+                          <td style={{ padding: "7px 10px", borderBottom: "1px solid #eef2f7" }}>{row.start ?? ""}</td>
+                          <td style={{ padding: "7px 10px", borderBottom: "1px solid #eef2f7" }}>{row.end ?? ""}</td>
+                          {columnMap.existingCm ? <td style={{ padding: "7px 10px", borderBottom: "1px solid #eef2f7" }}>{row.existingCm ?? ""}</td> : null}
+                          <td style={{ padding: "7px 10px", borderBottom: "1px solid #eef2f7", borderLeft: "2px solid #cbd5e1", background: "#f8fbff", color: "#334155", fontWeight: 700 }}>{row.maternalCm == null ? "" : row.maternalCm.toFixed(4)}</td>
+                          <td style={{ padding: "7px 4px", borderBottom: "1px solid #eef2f7", background: "#f8fbff", color: "#9a3412", fontWeight: 800, textAlign: "center", letterSpacing: "0.02em" }}>{matPatMarker}</td>
+                          <td style={{ padding: "7px 10px", borderBottom: "1px solid #eef2f7", background: "#f8fbff", color: "#334155", fontWeight: 700 }}>{row.paternalCm == null ? "" : row.paternalCm.toFixed(4)}</td>
+                          <td style={{ padding: "7px 10px", borderBottom: "1px solid #eef2f7", background: "#f8fbff", color: averageColor, fontWeight: 800 }}>
+                            {row.averagedCm == null ? "" : row.averagedCm.toFixed(4)}
+                            {averageArrow ? <span style={{ marginLeft: 6 }}>{averageArrow}</span> : null}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
               <div style={TABLE_PAGER_STYLE}>
                 <div style={{ fontSize: 12, color: "#64748b" }}>
-                  Showing rows {(safeTablePage - 1) * tablePageSize + 1} - {Math.min(safeTablePage * tablePageSize, totalTableRows)} of {totalTableRows}
+                  {totalTableRows
+                    ? `Showing rows ${(safeTablePage - 1) * tablePageSize + 1} - ${Math.min(safeTablePage * tablePageSize, totalTableRows)} of ${totalTableRows}`
+                    : "Showing 0 rows"}
                 </div>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                   <label style={{ fontSize: 12, color: "#4f5f73" }}>

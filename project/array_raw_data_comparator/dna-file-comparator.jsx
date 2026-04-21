@@ -54,8 +54,15 @@ function complement(base) {
   return { A: "T", T: "A", C: "G", G: "C" }[base] || base;
 }
 
-// Parse CSV line with support for quoted fields
-function parseCSVLine(line) {
+function normalizeHeaderToken(token) {
+  return String(token || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^#+\s*/, "")
+    .replace(/[^a-z0-9]+/g, "");
+}
+
+function splitDelimitedLine(line, delimiter) {
   const result = [];
   let current = "";
   let inQuotes = false;
@@ -64,7 +71,7 @@ function parseCSVLine(line) {
     const char = line[i];
     if (char === '"') {
       inQuotes = !inQuotes;
-    } else if (char === "," && !inQuotes) {
+    } else if (char === delimiter && !inQuotes) {
       result.push(current.trim());
       current = "";
     } else {
@@ -76,10 +83,114 @@ function parseCSVLine(line) {
   return result;
 }
 
+function isHeaderTokens(tokens) {
+  const normalized = tokens.map(normalizeHeaderToken).filter(Boolean);
+  const hasRsid = normalized.includes("rsid");
+  const hasChromosome = normalized.includes("chromosome") || normalized.includes("chrom") || normalized.includes("chr");
+  const hasPosition = normalized.includes("position") || normalized.includes("pos");
+  const hasGenotype =
+    normalized.includes("genotype") ||
+    normalized.includes("result") ||
+    normalized.includes("allele1") ||
+    normalized.includes("allele2") ||
+    normalized.includes("allele");
+
+  return hasRsid && hasChromosome && hasPosition && hasGenotype;
+}
+
+function buildColumnMap(tokens) {
+  const columnMap = {};
+
+  tokens.forEach((token, index) => {
+    const name = normalizeHeaderToken(token);
+    if (!name) return;
+
+    columnMap[name] = index;
+
+    if (name === "chromosome" || name === "chrom" || name === "chr") {
+      columnMap.chromosome = index;
+      columnMap.chrom = index;
+      columnMap.chr = index;
+    } else if (name === "position" || name === "pos") {
+      columnMap.position = index;
+      columnMap.pos = index;
+    } else if (name === "genotype") {
+      columnMap.genotype = index;
+    } else if (name === "result") {
+      columnMap.result = index;
+    } else if (name === "allele1") {
+      columnMap.allele1 = index;
+    } else if (name === "allele2") {
+      columnMap.allele2 = index;
+    } else if (name === "rsid") {
+      columnMap.rsid = index;
+    }
+  });
+
+  return columnMap;
+}
+
+function inferSchemaLine(line) {
+  const candidate = String(line || "").trim().replace(/^#+\s*/, "");
+  for (const delimiter of [",", "\t"]) {
+    const tokens = splitDelimitedLine(candidate, delimiter);
+    if (tokens.length < 3) continue;
+    if (isHeaderTokens(tokens)) {
+      return { delimiter, columnMap: buildColumnMap(tokens) };
+    }
+  }
+  return null;
+}
+
 function normalizeGeno(value) {
-  const clean = String(value || "").replace(/\//g, "").replace(/\s/g, "").toUpperCase();
+  const clean = String(value || "").replace(/[\s/|]/g, "").toUpperCase();
   if (clean === "00" || clean === "--") return "--";
   return clean.split("").sort().join("");
+}
+
+function getDisplayGeno(value) {
+  return String(value || "").replace(/[\s/|]/g, "").toUpperCase() || "--";
+}
+
+function isRepeatedAllele(value) {
+  return value.length === 2 && value[0] === value[1];
+}
+
+function normalizeComparableGeno(value) {
+  const geno = normalizeGeno(value);
+  if (geno === "--") return geno;
+  if (geno.length === 2 && geno[0] === geno[1]) return geno[0];
+  return geno;
+}
+
+function areEquivalentGenotypes(genoA, genoB) {
+  const a = normalizeComparableGeno(genoA);
+  const b = normalizeComparableGeno(genoB);
+  if (a === b) return true;
+  if (a === "--" || b === "--") return false;
+  return false;
+}
+
+const BASE_COLORS = {
+  A: "#2f8f2f",
+  C: "#1f5fbf",
+  G: "#c57b00",
+  T: "#c62828",
+};
+
+function GenoDisplay({ value }) {
+  const geno = getDisplayGeno(value);
+  const letters = geno === "--" ? ["-", "-"] : geno.split("");
+
+  return (
+    <span style={{ fontSize: 17, fontWeight: 700, letterSpacing: "0.02em" }}>
+      {letters.map((letter, index) => (
+        <span key={`${letter}-${index}`} style={{ color: BASE_COLORS[letter] || "#17212f" }}>
+          {letter}
+        </span>
+      ))}
+    </span>
+  );
 }
 
 function normalizeChromosome(value) {
@@ -159,15 +270,14 @@ function detectFormat(lines) {
   if (header.includes("familytree") || header.includes("ftdna")) return "FamilyTreeDNA";
   if (header.includes("myheritage")) return "MyHeritage";
 
-  const firstData = lines.find((line) => !line.startsWith("#") && line.trim()) || "";
-  
-  // Detect if CSV (comma-separated) or TSV (tab-separated)
-  const isCSV = firstData.includes(",") && !firstData.includes("\t");
-  const separator = isCSV ? "," : "\t";
-  const columns = firstData.toLowerCase().split(separator);
-  
+  const firstSchemaLine = lines.find((line) => inferSchemaLine(line));
+  if (!firstSchemaLine) return "Unknown";
+
+  const schema = inferSchemaLine(firstSchemaLine);
+  const columns = splitDelimitedLine(String(firstSchemaLine || "").trim().replace(/^#+\s*/, ""), schema.delimiter).map((col) => normalizeHeaderToken(col));
+
   if (columns.includes("allele1")) return "AncestryDNA";
-  if (columns.includes("result")) return isCSV ? "MyHeritage" : "FamilyTreeDNA";
+  if (columns.includes("result")) return schema.delimiter === "," ? "MyHeritage" : "FamilyTreeDNA";
   if (columns.includes("genotype")) return "23andMe";
   return "Unknown";
 }
@@ -177,29 +287,20 @@ function parseFile(content) {
   const format = detectFormat(lines);
   const snps = new Map();
   let columnMap = null;
+  let delimiter = null;
   let strandNote = "";
 
-  // Detect if file is CSV or TSV based on first data line
-  const firstDataLine = lines.find((line) => !line.startsWith("#") && line.trim()) || "";
-  const isCSV = firstDataLine.includes(",") && !firstDataLine.includes("\t");
-  const lineSplitter = (line) => (isCSV ? parseCSVLine(line) : line.split("\t")).map((col) => col.trim());
+  const lineSplitter = (line) => splitDelimitedLine(line, delimiter || (line.includes(",") && !line.includes("\t") ? "," : "\t")).map((col) => col.trim());
 
   for (const raw of lines) {
     const line = raw.trim();
     if (!line) continue;
 
-    // Some vendors (e.g., 23andMe) prefix the header row with '#'.
-    // Treat that line as the schema row before handling normal comments.
-    if (columnMap === null && line.startsWith("#")) {
-      const headerLine = line.replace(/^#+\s*/, "");
-      const headerColumns = lineSplitter(headerLine).map((col) => col.toLowerCase().replace(/^#/, ""));
-      if (headerColumns.includes("rsid") && headerColumns.includes("position")) {
-        columnMap = {};
-        headerColumns.forEach((name, index) => {
-          columnMap[name] = index;
-        });
-        continue;
-      }
+    const schema = columnMap === null ? inferSchemaLine(line) : null;
+    if (schema) {
+      delimiter = schema.delimiter;
+      columnMap = schema.columnMap;
+      continue;
     }
 
     if (line.startsWith("#")) {
@@ -210,16 +311,6 @@ function parseFile(content) {
     }
 
     const columns = lineSplitter(line);
-
-    if (columnMap === null) {
-      const lower = columns.map((col) => col.toLowerCase().replace(/^#/, ""));
-      columnMap = {};
-      lower.forEach((name, index) => {
-        columnMap[name] = index;
-      });
-      if (!("rsid" in columnMap) && !("position" in columnMap)) columnMap = null;
-      continue;
-    }
 
     const rsid = columns[columnMap.rsid] || "";
     const chr = columns[columnMap.chromosome] || columns[columnMap.chr] || "";
@@ -272,7 +363,7 @@ function compareFiles(fileA, fileB) {
       processedA.add(rid);
       processedB.add(rid);
 
-      if (snpA.geno === snpB.geno) {
+      if (areEquivalentGenotypes(snpA.geno, snpB.geno)) {
         concordant.push({ rid, pos: snpA.pos, chr: snpA.chr, genoA: snpA.rawGeno, genoB: snpB.rawGeno });
       } else {
         discordant.push({ rid, pos: snpA.pos, chr: snpA.chr, genoA: snpA.rawGeno, genoB: snpB.rawGeno });
@@ -386,7 +477,8 @@ const styles = {
   table: { width: "100%", borderCollapse: "collapse", fontSize: 13, fontFamily: "'DM Mono', 'Courier New', monospace" },
   th: { textAlign: "left", fontSize: 11, textTransform: "uppercase", letterSpacing: "0.05em", color: "#5f6f84", background: "#edf3fb", borderBottom: "1px solid #c7d3e3", padding: "8px 10px", whiteSpace: "nowrap" },
   td: { borderBottom: "1px solid #d9e2ef", padding: "7px 10px", whiteSpace: "nowrap" },
-  pager: { display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontSize: 12, color: "#5f6f84" },
+  pager: { display: "flex", alignItems: "center", gap: 8, marginTop: 10, fontSize: 12, color: "#5f6f84", flexWrap: "wrap" },
+  pagerInfo: { display: "inline-flex", alignItems: "center", gap: 6 },
   pagerBtn: (disabled) => ({
     borderRadius: 8,
     border: "1px solid #c7d3e3",
@@ -396,8 +488,18 @@ const styles = {
     padding: "4px 10px",
     cursor: disabled ? "not-allowed" : "pointer",
   }),
+  pagerJumpWrap: { display: "inline-flex", alignItems: "center", gap: 6 },
+  pagerInput: {
+    width: 72,
+    borderRadius: 8,
+    border: "1px solid #c7d3e3",
+    padding: "4px 8px",
+    fontSize: 12,
+    color: "#17212f",
+    background: "#fff",
+  },
   rsidCellWrap: { display: "inline-flex", flexDirection: "column", gap: 4, whiteSpace: "normal" },
-  rsidId: { fontFamily: "'DM Mono', 'Courier New', monospace", fontSize: 12 },
+  rsidId: { fontFamily: "'DM Mono', 'Courier New', monospace", fontSize: "inherit" },
   rsidLinkRow: { display: "inline-flex", gap: 4, flexWrap: "wrap" },
   rsidLinkBadge: {
     display: "inline-block",
@@ -499,6 +601,7 @@ export default function DnaFileComparatorApp() {
   const [fileB, setFileB] = useState(null);
   const [activeTab, setActiveTab] = useState("summary");
   const [errorMessage, setErrorMessage] = useState("");
+  const [pageJumpInput, setPageJumpInput] = useState("");
   const [pageByTab, setPageByTab] = useState({
     summary: 0,
     discordant: 0,
@@ -597,6 +700,20 @@ export default function DnaFileComparatorApp() {
 
   const setPage = (tab, nextPage) => {
     setPageByTab((prev) => ({ ...prev, [tab]: nextPage }));
+    setPageJumpInput("");
+  };
+
+  const commitPageJump = () => {
+    if (String(pageJumpInput).trim() === "") return;
+
+    const raw = Number(pageJumpInput);
+    if (!Number.isFinite(raw)) {
+      setPageJumpInput("");
+      return;
+    }
+
+    const next = Math.min(totalPages, Math.max(1, Math.trunc(raw)));
+    setPage(activeTab, next - 1);
   };
 
   const columns =
@@ -735,11 +852,11 @@ export default function DnaFileComparatorApp() {
                   if (activeTab === "discordant") {
                     return (
                       <tr key={key}>
-                        <td style={styles.td}><RsidBadges rsid={row.rid} /></td>
-                        <td style={styles.td}>{row.chr}</td>
-                        <td style={styles.td}>{row.pos}</td>
-                        <td style={{ ...styles.td, color: "#b42318" }}>{row.genoA}</td>
-                        <td style={{ ...styles.td, color: "#b42318" }}>{row.genoB}</td>
+                                        <td style={{ ...styles.td, fontSize: 17, fontWeight: 700 }}><RsidBadges rsid={row.rid} /></td>
+                                        <td style={{ ...styles.td, fontSize: 17, fontWeight: 700 }}>{row.chr}</td>
+                                        <td style={{ ...styles.td, fontSize: 17, fontWeight: 700 }}>{row.pos}</td>
+                                        <td style={{ ...styles.td, fontSize: 17, fontWeight: 700 }}><GenoDisplay value={row.genoA} /></td>
+                                        <td style={{ ...styles.td, fontSize: 17, fontWeight: 700 }}><GenoDisplay value={row.genoB} /></td>
                         <td style={{ ...styles.td, fontFamily: "'DM Sans', 'Segoe UI', sans-serif", fontSize: 11, color: "#5f6f84" }}>{makeDiscordantNote(row.genoA, row.genoB)}</td>
                       </tr>
                     );
@@ -748,12 +865,12 @@ export default function DnaFileComparatorApp() {
                   if (activeTab === "rsidMismatch") {
                     return (
                       <tr key={key}>
-                        <td style={styles.td}><RsidBadges rsid={row.ridA} /></td>
-                        <td style={styles.td}><RsidBadges rsid={row.ridB} /></td>
-                        <td style={styles.td}>{row.chr}</td>
-                        <td style={styles.td}>{row.pos}</td>
-                        <td style={styles.td}>{row.genoA}</td>
-                        <td style={styles.td}>{row.genoB}</td>
+                        <td style={{ ...styles.td, fontSize: 17, fontWeight: 700 }}><RsidBadges rsid={row.ridA} /></td>
+                        <td style={{ ...styles.td, fontSize: 17, fontWeight: 700 }}><RsidBadges rsid={row.ridB} /></td>
+                        <td style={{ ...styles.td, fontSize: 17, fontWeight: 700 }}>{row.chr}</td>
+                        <td style={{ ...styles.td, fontSize: 17, fontWeight: 700 }}>{row.pos}</td>
+                        <td style={{ ...styles.td, fontSize: 17, fontWeight: 700 }}><GenoDisplay value={row.genoA} /></td>
+                        <td style={{ ...styles.td, fontSize: 17, fontWeight: 700 }}><GenoDisplay value={row.genoB} /></td>
                       </tr>
                     );
                   }
@@ -761,20 +878,20 @@ export default function DnaFileComparatorApp() {
                   if (activeTab === "onlyA" || activeTab === "onlyB") {
                     return (
                       <tr key={key}>
-                        <td style={styles.td}><RsidBadges rsid={row.rsid} /></td>
-                        <td style={styles.td}>{row.chr}</td>
-                        <td style={styles.td}>{row.pos}</td>
-                        <td style={styles.td}>{row.rawGeno}</td>
+                        <td style={{ ...styles.td, fontSize: 17, fontWeight: 700 }}><RsidBadges rsid={row.rsid} /></td>
+                        <td style={{ ...styles.td, fontSize: 17, fontWeight: 700 }}>{row.chr}</td>
+                        <td style={{ ...styles.td, fontSize: 17, fontWeight: 700 }}>{row.pos}</td>
+                        <td style={{ ...styles.td, fontSize: 17, fontWeight: 700 }}><GenoDisplay value={row.rawGeno} /></td>
                       </tr>
                     );
                   }
 
                   return (
                     <tr key={key}>
-                      <td style={styles.td}><RsidBadges rsid={row.rid} /></td>
-                      <td style={styles.td}>{row.chr}</td>
-                      <td style={styles.td}>{row.pos}</td>
-                      <td style={styles.td}>{row.genoA}</td>
+                      <td style={{ ...styles.td, fontSize: 17, fontWeight: 700 }}><RsidBadges rsid={row.rid} /></td>
+                      <td style={{ ...styles.td, fontSize: 17, fontWeight: 700 }}>{row.chr}</td>
+                      <td style={{ ...styles.td, fontSize: 17, fontWeight: 700 }}>{row.pos}</td>
+                      <td style={{ ...styles.td, fontSize: 17, fontWeight: 700 }}><GenoDisplay value={row.genoA} /></td>
                     </tr>
                   );
                 })}
@@ -788,11 +905,44 @@ export default function DnaFileComparatorApp() {
                 type="button"
                 disabled={page === 0}
                 style={styles.pagerBtn(page === 0)}
+                onClick={() => setPage(activeTab, 0)}
+              >
+                first
+              </button>
+              <button
+                type="button"
+                disabled={page === 0}
+                style={styles.pagerBtn(page === 0)}
                 onClick={() => setPage(activeTab, Math.max(0, page - 1))}
               >
                 prev
               </button>
-              <span>Page {page + 1} of {totalPages} ({activeRows.length.toLocaleString()} entries)</span>
+              <span style={styles.pagerInfo}>
+                <span>Page</span>
+                <input
+                  id="page-jump-input"
+                  type="number"
+                  min={1}
+                  max={totalPages}
+                  value={pageJumpInput === "" ? String(page + 1) : pageJumpInput}
+                  style={styles.pagerInput}
+                  onChange={(event) => {
+                    const nextValue = event.currentTarget.value.replace(/[^\d]/g, "");
+                    setPageJumpInput(nextValue);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter") return;
+                    event.preventDefault();
+                    commitPageJump();
+                  }}
+                  onBlur={() => {
+                    if (String(pageJumpInput).trim() === "") return;
+                    commitPageJump();
+                  }}
+                />
+              </span>
+              <span>of {totalPages.toLocaleString()}</span>
+              <span>({activeRows.length.toLocaleString()} entries)</span>
               <button
                 type="button"
                 disabled={page >= totalPages - 1}
@@ -800,6 +950,14 @@ export default function DnaFileComparatorApp() {
                 onClick={() => setPage(activeTab, Math.min(totalPages - 1, page + 1))}
               >
                 next
+              </button>
+              <button
+                type="button"
+                disabled={page >= totalPages - 1}
+                style={styles.pagerBtn(page >= totalPages - 1)}
+                onClick={() => setPage(activeTab, totalPages - 1)}
+              >
+                last
               </button>
             </div>
           ) : null}

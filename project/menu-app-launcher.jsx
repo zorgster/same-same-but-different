@@ -11,6 +11,12 @@ const COLORS = {
   accentSoft: "#ccfbf1",
   soonBg: "#eef2ff",
   soonText: "#4f46e5",
+  betaBg: "#fff7ed",
+  betaText: "#c2410c",
+  experimentalBg: "#fdf2f8",
+  experimentalText: "#be185d",
+  defaultBadgeBg: "#f3f4f6",
+  defaultBadgeText: "#374151",
 };
 
 const CONTACT = {
@@ -115,22 +121,8 @@ const styles = {
     color: COLORS.muted,
     lineHeight: 1.5,
   },
-  badgeLive: {
+  statusBadge: {
     display: "inline-block",
-    background: COLORS.accentSoft,
-    color: COLORS.accent,
-    fontSize: 10,
-    fontWeight: 700,
-    borderRadius: 999,
-    padding: "2px 8px",
-    marginBottom: 8,
-    textTransform: "uppercase",
-    letterSpacing: "0.06em",
-  },
-  badgeSoon: {
-    display: "inline-block",
-    background: COLORS.soonBg,
-    color: COLORS.soonText,
     fontSize: 10,
     fontWeight: 700,
     borderRadius: 999,
@@ -153,6 +145,31 @@ const styles = {
     fontWeight: 600,
   },
 };
+
+function getStatusMeta(status) {
+  const normalized = String(status || "soon").toLowerCase();
+
+  if (normalized === "live") {
+    return { label: "Live", style: { background: COLORS.accentSoft, color: COLORS.accent } };
+  }
+
+  if (normalized === "beta") {
+    return { label: "Beta", style: { background: COLORS.betaBg, color: COLORS.betaText } };
+  }
+
+  if (normalized === "experimental") {
+    return { label: "Experimental", style: { background: COLORS.experimentalBg, color: COLORS.experimentalText } };
+  }
+
+  if (normalized === "soon") {
+    return { label: "Soon", style: { background: COLORS.soonBg, color: COLORS.soonText } };
+  }
+
+  return {
+    label: normalized ? normalized.replace(/\b\w/g, (char) => char.toUpperCase()) : "Soon",
+    style: { background: COLORS.defaultBadgeBg, color: COLORS.defaultBadgeText },
+  };
+}
 
 export default function MenuAppLauncher() {
   const [activeTool, setActiveTool] = useState(null);
@@ -190,17 +207,18 @@ export default function MenuAppLauncher() {
             <div style={styles.sectionTitle}>{section.title}</div>
             <div style={styles.grid}>
               {(section.apps || []).map((app) => {
-                const isLive = app.status === "live";
+                const statusMeta = getStatusMeta(app.status);
+                const isClickable = Boolean(app.component);
                 return (
                   <article
                     key={app.id}
-                    style={{ ...styles.card, ...(isLive ? {} : styles.cardSoon) }}
+                    style={{ ...styles.card, ...(!isClickable ? styles.cardSoon : {}) }}
                     onClick={() => {
                       if (app.component) setActiveTool(app.id);
                     }}
                   >
-                    <span style={isLive ? styles.badgeLive : styles.badgeSoon}>
-                      {isLive ? "Live" : "Soon"}
+                    <span style={{ ...styles.statusBadge, ...statusMeta.style }}>
+                      {statusMeta.label}
                     </span>
                     <div style={styles.cardName}>{app.name}</div>
                     <div style={styles.cardDesc}>{app.desc}</div>

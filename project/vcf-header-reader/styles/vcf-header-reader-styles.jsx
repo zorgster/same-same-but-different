@@ -280,7 +280,6 @@ export const styles = {
   },
   historyOptionKey: {
     fontSize: 11,
-    textTransform: "uppercase",
     letterSpacing: "0.05em",
     color: COLORS.muted,
     marginBottom: 3,

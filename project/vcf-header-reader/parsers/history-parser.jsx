@@ -53,6 +53,17 @@ function normalizeCommandValue(rawVal) {
   return value;
 }
 
+function splitTrailingDate(text) {
+  const value = String(text || "").trim();
+  const match = value.match(/^(.*?)(?:;\s*Date\s*=\s*(.+))$/i);
+  if (!match) return { text: value, date: null };
+
+  return {
+    text: match[1].trim(),
+    date: match[2].trim() || null,
+  };
+}
+
 function tokenizeCommandText(text) {
   const input = String(text || "").trim();
   if (!input) return [];
@@ -198,7 +209,17 @@ function resolveHistoryToolLabel(key, rawVal, structured = null) {
       .replace(/Command(?:Line)?$/i, "")
       .replace(/Version$/i, "")
       .trim();
-    return formatToolLabel("bcftools", sub);
+
+    if (sub) return formatToolLabel("bcftools", sub);
+
+    if (keyLower.includes("command")) {
+      const firstToken = val.split(/\s+/)[0] || "";
+      if (firstToken && firstToken.toLowerCase() !== "bcftools") {
+        return formatToolLabel("bcftools", firstToken);
+      }
+    }
+
+    return formatPackageLabel("bcftools");
   }
 
   if (keyLower.startsWith("gatkcommandline")) {
@@ -220,17 +241,6 @@ function resolveHistoryToolLabel(key, rawVal, structured = null) {
   if (keyLower.includes("snpsift")) return formatPackageLabel("snpsift");
 
   return formatPackageLabel(key.replace(/[_]?Command(?:Line)?$/i, "").replace(/[_-]+$/g, "").trim()) || key;
-}
-
-function splitTrailingDate(value) {
-  const text = normalizeCommandValue(value);
-  const match = text.match(/^(.*?)(?:\s*;\s*Date\s*=\s*)(.+)$/i);
-  if (!match) return { text, date: null };
-
-  return {
-    text: (match[1] || "").trim(),
-    date: (match[2] || "").trim() || null,
-  };
 }
 
 function parseVepMetadata(rawValue) {
@@ -343,6 +353,8 @@ function canMerge(existing, incoming) {
 function mergeHistoryEntries(entries) {
   const merged = [];
 
+  const isGenericBcftoolsLabel = (label) => String(label || "") === formatPackageLabel("bcftools");
+
   for (const entry of entries) {
     const existingIndex = merged.findIndex((candidate) => canMerge(candidate, entry));
 
@@ -354,12 +366,15 @@ function mergeHistoryEntries(entries) {
     const existing = merged[existingIndex];
     const preferEntryHeaderKey =
       /command(?:line)?/.test(String(entry.keyLower || "")) && /version$/.test(String(existing.keyLower || ""));
+    const mergedTool = isGenericBcftoolsLabel(existing.tool) && !isGenericBcftoolsLabel(entry.tool)
+      ? entry.tool
+      : existing.tool || entry.tool;
 
     merged[existingIndex] = {
       ...existing,
       key: preferEntryHeaderKey ? entry.key : existing.key,
       keyLower: preferEntryHeaderKey ? entry.keyLower : existing.keyLower,
-      tool: existing.tool || entry.tool,
+      tool: mergedTool,
       family: existing.family || entry.family,
       id: existing.id || entry.id,
       version: existing.version || entry.version,

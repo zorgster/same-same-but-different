@@ -11,6 +11,25 @@ const PACKAGE_LABELS = {
 };
 
 const SUBTOOL_LABELS = {
+  bcftools: {
+    annotate: "Annotate",
+    call: "Call",
+    concat: "Concat",
+    consensus: "Consensus",
+    convert: "Convert",
+    count: "Count",
+    filter: "Filter",
+    index: "Index",
+    isec: "Isec",
+    merge: "Merge",
+    mpileup: "Mpileup",
+    norm: "Norm",
+    query: "Query",
+    reheader: "Reheader",
+    sort: "Sort",
+    stats: "Stats",
+    view: "View",
+  },
   gatk: {
     combinevariants: "CombineVariants",
     genotypegvcfs: "GenotypeGVCFs",

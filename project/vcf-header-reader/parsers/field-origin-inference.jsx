@@ -32,10 +32,18 @@ const TOOL_FIELD_SIGNATURES = [
     other: [],
   },
   {
-    key: "bcftools",
-    label: "BCFtools",
-    info: [],
-    format: [],
+    key: "bcftools-mpileup",
+    label: "BCFtools Mpileup",
+    info: ["AD", "ADF", "ADR", "BQBZ", "DP", "DPR", "FS", "I16", "IDV", "IMF", "MQ0F", "MQBZ", "MQSBZ", "NM", "NMBZ", "QS", "RPBZ", "SCBZ", "SCR", "SGB", "VDB", "INDEL"],
+    format: ["AD", "ADF", "ADR", "DP", "DP4", "DV", "DPR", "GT", "NMBZ", "PL", "QS", "SCR", "SP"],
+    filter: [],
+    other: [],
+  },
+  {
+    key: "bcftools-call",
+    label: "BCFtools Call",
+    info: ["AC", "AC1", "AF1", "AF2", "AN", "MQ", "FQ", "PV4", "G3", "HWE", "DP4"],
+    format: ["CGT", "UGT", "GT", "GQ", "GP"],
     filter: ["lowqual", "mnp", "indel", "snp", "other", "pass"],
     other: [],
   },
@@ -73,7 +81,8 @@ function detectActiveToolSignals(historyEntries) {
     if (blob.includes("freebayes")) signals.add("freebayes");
     if (blob.includes("selectvariants")) signals.add("gatk-selectvariants");
     if (blob.includes("combinevariants")) signals.add("gatk-combinevariants");
-    if (blob.includes("bcftools")) signals.add("bcftools");
+    if (blob.includes("mpileup")) signals.add("bcftools-mpileup");
+    if (blob.includes("bcftools") && /\bcall\b/.test(blob)) signals.add("bcftools-call");
     if (blob.includes("vcfanno")) signals.add("vcfanno");
   }
 

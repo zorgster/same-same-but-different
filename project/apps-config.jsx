@@ -2,6 +2,7 @@ import NameIdMismatchApp from "./name-id-mismatch.jsx";
 import EmailValidatorApp from "./email-validator.jsx";
 import VcfHeaderReaderApp from "./vcf-header-reader/VcfHeaderReaderApp.jsx";
 import DnaFileComparatorApp from "./array_raw_data_comparator/dna-file-comparator.jsx";
+import GeneticDistanceCalculatorApp from "./genetic-distance-calculator/genetic-distance-calculator.jsx";
 
 export const APPS = [
   {
@@ -16,18 +17,18 @@ export const APPS = [
         component: NameIdMismatchApp,
       },
       {
-        id: "masterlist-merge",
-        name: "Masterlist merge",
-        desc: "Merge near-identical lists while preserving trusted master records",
-        status: "soon",
-        component: null,
-      },
-      {
         id: "email-id-validator",
         name: "Email validator",
         desc: "Upload one file, select email columns, and validate email formatting",
         status: "live",
         component: EmailValidatorApp,
+      },
+      {
+        id: "masterlist-merge",
+        name: "Masterlist merge",
+        desc: "Merge near-identical lists while preserving trusted master records",
+        status: "soon",
+        component: null,
       },
       {
         id: "column-shift-check",
@@ -46,15 +47,22 @@ export const APPS = [
         id: "vcf-header-reader",
         name: "VCF Header Reader",
         desc: "Read and inspect VCF, VCF.GZ, or BCF headers",
-        status: "live",
+        status: "beta",
         component: VcfHeaderReaderApp,
       },
       {
         id: "array-raw-data-comparator",
         name: "Array Raw Data Comparator",
         desc: "Compare raw data files from genomic arrays (23andMe, Ancestry) to find discrepancies",
-        status: "live",
+        status: "beta",
         component: DnaFileComparatorApp,
+      },
+      {
+        id: "genetic-distance-calculator",
+        name: "Genetic Distance Calculator",
+        desc: "Calculate cM across DNA segments using recombination maps",
+        status: "experimental",
+        component: GeneticDistanceCalculatorApp,
       },
       {
         id: "genomics-placeholder",

@@ -5,11 +5,6 @@ function formatOptionHeader(option, fallbackIndex) {
   const key = String(option?.key || "").trim();
   if (!key) return `Argument ${fallbackIndex + 1}`;
 
-  if (option?.source === "derived") {
-    const cleaned = key.replace(/^-+/, "").replace(/-/g, " ").trim();
-    return cleaned || `Argument ${fallbackIndex + 1}`;
-  }
-
   return key;
 }
 

@@ -22,7 +22,7 @@ const COLORS = {
 };
 
 const CONTACT = {
-  owner: "TexiGene",
+  owner: "Oliver Slay, Ph.D.",
   githubDiscussions:
     "https://github.com/zorgster/same-same-but-different/discussions",
   discordInvite: "#",
@@ -272,6 +272,10 @@ export default function MenuAppLauncher() {
         ))}
 
         <footer style={styles.footer}>
+          <p style={styles.footerText}>
+            This website does not use cookies. No tracking or storage
+            technologies are employed.
+          </p>
           <div style={styles.footerText}>
             (c) {currentYear} SameSameButDifferent. Created, designed, and
             maintained by {CONTACT.owner}.
@@ -285,14 +289,6 @@ export default function MenuAppLauncher() {
               style={styles.footerLink}
             >
               GitHub Discussions
-            </a>
-            <a
-              href={CONTACT.discordInvite}
-              target="_blank"
-              rel="noreferrer"
-              style={styles.footerLink}
-            >
-              Discord
             </a>
           </div>
         </footer>

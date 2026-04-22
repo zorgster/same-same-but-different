@@ -274,8 +274,9 @@ export default function MenuAppLauncher() {
         <footer style={styles.footer}>
           <p style={styles.footerText}>
             This website does not use cookies. No tracking or storage
-            technologies are employed.
+            technologies are employed. All files are processed on your device.
           </p>
+          <br />
           <div style={styles.footerText}>
             (c) {currentYear} SameSameButDifferent. Created, designed, and
             maintained by {CONTACT.owner}.

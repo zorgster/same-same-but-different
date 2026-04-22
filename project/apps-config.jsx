@@ -72,11 +72,37 @@ export const APPS = [
         status: "experimental",
         component: GeneticDistanceCalculatorApp,
       },
+    ],
+  },
+  {
+    id: "affiliate-links",
+    title: "Affiliate Links",
+    apps: [
       {
-        id: "genomics-placeholder",
-        name: "Genomics tools starter",
-        desc: "First domain collection card for upcoming genomics-specific validators",
-        status: "soon",
+        id: "tellmegen-wgs-link",
+        name: "TellMeGen Ultra (WGS 30X)",
+        desc: "Looking for WGS 30X in Europe? Check out TellMeGen and support our work!",
+        status: "affiliate",
+        affiliateLink:
+          "https://shop.tellmegen.com/en/collections/ultra?sca_ref=9946214.NninYFXhqaP&sca_source=ssbd",
+        component: null,
+      },
+      {
+        id: "tellmegen-dna-ancestry-link",
+        name: "TellMeGen Starter DNA Kit",
+        desc: "A starter kit for exploring DNA Traits + Ancestry in Europe. Check out TellMeGen and support our work!",
+        status: "affiliate",
+        affiliateLink:
+          "https://shop.tellmegen.com/en/collections/starter?sca_ref=9946214.NninYFXhqaP&sca_source=ssbd",
+        component: null,
+      },
+      {
+        id: "tellmegen-upload-raw-data-link",
+        name: "TellMeGen Raw Data Upload",
+        desc: "Upload your existing raw data from 23andMe, Ancestry, or MyHeritage to TellMeGen and support our work!",
+        status: "affiliate",
+        affiliateLink:
+          "https://www.tellmegen.com/en/upload-raw-data?sca_ref=9946214.NninYFXhqaP&sca_source=ssbd",
         component: null,
       },
     ],

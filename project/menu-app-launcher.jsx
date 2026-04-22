@@ -15,13 +15,16 @@ const COLORS = {
   betaText: "#c2410c",
   experimentalBg: "#fdf2f8",
   experimentalText: "#be185d",
+  affiliateBg: "#4f46e5",
+  affiliateText: "#eef2ff",
   defaultBadgeBg: "#f3f4f6",
   defaultBadgeText: "#374151",
 };
 
 const CONTACT = {
   owner: "TexiGene",
-  githubDiscussions: "https://github.com/zorgster/same-same-but-different/discussions",
+  githubDiscussions:
+    "https://github.com/zorgster/same-same-but-different/discussions",
   discordInvite: "#",
 };
 
@@ -150,24 +153,54 @@ function getStatusMeta(status) {
   const normalized = String(status || "soon").toLowerCase();
 
   if (normalized === "live") {
-    return { label: "Live", style: { background: COLORS.accentSoft, color: COLORS.accent } };
+    return {
+      label: "Live",
+      style: { background: COLORS.accentSoft, color: COLORS.accent },
+    };
   }
 
   if (normalized === "beta") {
-    return { label: "Beta", style: { background: COLORS.betaBg, color: COLORS.betaText } };
+    return {
+      label: "Beta",
+      style: { background: COLORS.betaBg, color: COLORS.betaText },
+    };
   }
 
   if (normalized === "experimental") {
-    return { label: "Experimental", style: { background: COLORS.experimentalBg, color: COLORS.experimentalText } };
+    return {
+      label: "Experimental",
+      style: {
+        background: COLORS.experimentalBg,
+        color: COLORS.experimentalText,
+      },
+    };
+  }
+
+  if (normalized === "affiliate") {
+    return {
+      label: "Affiliate",
+      style: {
+        background: COLORS.affiliateBg,
+        color: COLORS.affiliateText,
+      },
+    };
   }
 
   if (normalized === "soon") {
-    return { label: "Soon", style: { background: COLORS.soonBg, color: COLORS.soonText } };
+    return {
+      label: "Soon",
+      style: { background: COLORS.soonBg, color: COLORS.soonText },
+    };
   }
 
   return {
-    label: normalized ? normalized.replace(/\b\w/g, (char) => char.toUpperCase()) : "Soon",
-    style: { background: COLORS.defaultBadgeBg, color: COLORS.defaultBadgeText },
+    label: normalized
+      ? normalized.replace(/\b\w/g, (char) => char.toUpperCase())
+      : "Soon",
+    style: {
+      background: COLORS.defaultBadgeBg,
+      color: COLORS.defaultBadgeText,
+    },
   };
 }
 
@@ -208,16 +241,25 @@ export default function MenuAppLauncher() {
             <div style={styles.grid}>
               {(section.apps || []).map((app) => {
                 const statusMeta = getStatusMeta(app.status);
-                const isClickable = Boolean(app.component);
+                const isClickable =
+                  Boolean(app.component) || statusMeta.label === "Affiliate";
                 return (
                   <article
                     key={app.id}
-                    style={{ ...styles.card, ...(!isClickable ? styles.cardSoon : {}) }}
+                    style={{
+                      ...styles.card,
+                      ...(!isClickable ? styles.cardSoon : {}),
+                    }}
                     onClick={() => {
                       if (app.component) setActiveTool(app.id);
+                      if (statusMeta.label === "Affiliate") {
+                        window.open(app.affiliateLink, "_blank");
+                      }
                     }}
                   >
-                    <span style={{ ...styles.statusBadge, ...statusMeta.style }}>
+                    <span
+                      style={{ ...styles.statusBadge, ...statusMeta.style }}
+                    >
                       {statusMeta.label}
                     </span>
                     <div style={styles.cardName}>{app.name}</div>
@@ -231,7 +273,8 @@ export default function MenuAppLauncher() {
 
         <footer style={styles.footer}>
           <div style={styles.footerText}>
-            (c) {currentYear} SameSameButDifferent. Created, designed, and maintained by {CONTACT.owner}.
+            (c) {currentYear} SameSameButDifferent. Created, designed, and
+            maintained by {CONTACT.owner}.
           </div>
           <div style={styles.footerLinks}>
             <span style={styles.footerText}>Public contact:</span>

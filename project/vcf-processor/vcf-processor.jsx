@@ -675,6 +675,9 @@ export default function VCFProcessorApp() {
                 </div>
                 <div style={{ maxHeight: "500px", overflowY: "auto" }}>
                   {sortedChroms.map((chrom) => {
+                    const HIST_H = 30;
+                    const HIST_GAP = 4;
+                    const BAR_PAD = 2;
                     const count = chromCounts[chrom] || 0;
                     const pct = maxCount > 0 ? count / maxCount : 0;
                     const denom = Math.max(1, stats?.longestMaxPos || 1);
@@ -691,16 +694,7 @@ export default function VCFProcessorApp() {
                     const maxBin = Math.max(1, stats?.maxBinCount || 1);
                     const widthPct = (chromMax / denom) * 100;
                     const visibleWidthPct = Math.max(6, widthPct);
-                    console.log(
-                      "DBG plot",
-                      chrom,
-                      "widthPct=",
-                      widthPct.toFixed(2),
-                      "binCount=",
-                      binCount,
-                      "binsSample=",
-                      bins.slice(0, 6),
-                    );
+
                     return (
                       <div
                         key={chrom}
@@ -718,8 +712,8 @@ export default function VCFProcessorApp() {
                         <div style={{ paddingRight: "1rem" }}>
                           <div
                             style={{
-                              marginBottom: "6px",
-                              height: "20px",
+                              marginBottom: `${HIST_GAP}px`,
+                              height: `${HIST_H}px`,
                               overflow: "hidden",
                             }}
                           >
@@ -730,12 +724,14 @@ export default function VCFProcessorApp() {
                                 gap: "1px",
                                 alignItems: "flex-end",
                                 background: "transparent",
+                                height: "100%",
                               }}
                             >
                               {bins.map((b, i) => {
+                                const useableH = HIST_H - BAR_PAD;
                                 const barPx = Math.max(
                                   2,
-                                  Math.round((b / maxBin) * 20),
+                                  Math.round((b / maxBin) * useableH),
                                 );
                                 return (
                                   <div

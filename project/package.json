@@ -9,12 +9,14 @@
     "test": "vitest"
   },
   "dependencies": {
+    "fflate": "^0.8.2",
     "jszip": "^3.10.1",
     "lucide-react": "^0.300.0",
     "pako": "^2.1.0",
     "papaparse": "^5.5.3",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "react-dropzone": "^15.0.0",
     "react-use": "^17.6.0",
     "xlsx": "^0.18.5"
   },

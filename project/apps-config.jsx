@@ -4,6 +4,8 @@ import VcfHeaderReaderApp from "./vcf-header-reader/VcfHeaderReaderApp.jsx";
 import DnaFileComparatorApp from "./array_raw_data_comparator/dna-file-comparator.jsx";
 import GeneticDistanceCalculatorApp from "./genetic-distance-calculator/genetic-distance-calculator.jsx";
 import TableInspectorApp from "./table-inspector.jsx";
+import DataImputationApp from "./data_imputation/data-imputation.jsx";
+import VcfProcessorApp from "./vcf-processor/vcf-processor.jsx";
 
 export const APPS = [
   {
@@ -32,9 +34,9 @@ export const APPS = [
         component: TableInspectorApp,
       },
       {
-        id: "masterlist-merge",
-        name: "Masterlist merge",
-        desc: "Merge near-identical lists while preserving trusted master records",
+        id: "data-imputation",
+        name: "Data Imputation",
+        desc: "Impute missing values in your dataset using various strategies",
         status: "soon",
         component: null,
       },
@@ -57,6 +59,13 @@ export const APPS = [
         desc: "Read and inspect VCF, VCF.GZ, or BCF headers",
         status: "beta",
         component: VcfHeaderReaderApp,
+      },
+      {
+        id: "vcf-processor",
+        name: "VCF Processor",
+        desc: "Process and analyze VCF or VCF.GZ files (no BCF support yet)",
+        status: "beta",
+        component: VcfProcessorApp,
       },
       {
         id: "array-raw-data-comparator",

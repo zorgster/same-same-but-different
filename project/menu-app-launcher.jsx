@@ -1,152 +1,13 @@
-import { useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { APPS } from "./apps-config.jsx";
-
-const COLORS = {
-  bg: "#f5f7fb",
-  surface: "#ffffff",
-  border: "#d8deea",
-  text: "#1f2937",
-  muted: "#5f6b7a",
-  accent: "#0f766e",
-  accentSoft: "#ccfbf1",
-  soonBg: "#eef2ff",
-  soonText: "#4f46e5",
-  betaBg: "#fff7ed",
-  betaText: "#c2410c",
-  experimentalBg: "#fdf2f8",
-  experimentalText: "#be185d",
-  affiliateBg: "#4f46e5",
-  affiliateText: "#eef2ff",
-  defaultBadgeBg: "#f3f4f6",
-  defaultBadgeText: "#374151",
-};
+import { COLORS, styles } from "./styles/menu-app-styles.jsx";
+import { useNavigate, useParams, useLocation } from "react-router-dom";
 
 const CONTACT = {
   owner: "Oliver Slay, Ph.D.",
   githubDiscussions:
     "https://github.com/zorgster/same-same-but-different/discussions",
   discordInvite: "#",
-};
-
-const styles = {
-  page: {
-    minHeight: "100vh",
-    background: COLORS.bg,
-    fontFamily: "'Segoe UI', Tahoma, Geneva, Verdana, sans-serif",
-    color: COLORS.text,
-  },
-  topbar: {
-    display: "flex",
-    alignItems: "center",
-    gap: 12,
-    padding: "14px 20px",
-    background: COLORS.surface,
-    borderBottom: `1px solid ${COLORS.border}`,
-    position: "sticky",
-    top: 0,
-    zIndex: 10,
-  },
-  topbarTitle: {
-    fontSize: 15,
-    fontWeight: 700,
-    color: COLORS.text,
-  },
-  topbarSubtitle: {
-    marginLeft: "auto",
-    fontSize: 12,
-    color: COLORS.muted,
-  },
-  home: {
-    maxWidth: 940,
-    margin: "0 auto",
-    padding: "28px 20px 36px",
-  },
-  footer: {
-    marginTop: 24,
-    paddingTop: 16,
-    borderTop: `1px solid ${COLORS.border}`,
-    display: "flex",
-    gap: 12,
-    justifyContent: "space-between",
-    alignItems: "center",
-    flexWrap: "wrap",
-  },
-  footerText: {
-    fontSize: 12,
-    color: COLORS.muted,
-  },
-  footerLinks: {
-    display: "flex",
-    gap: 10,
-    alignItems: "center",
-    flexWrap: "wrap",
-  },
-  footerLink: {
-    fontSize: 12,
-    color: COLORS.accent,
-    fontWeight: 600,
-    textDecoration: "none",
-  },
-  sectionTitle: {
-    fontSize: 12,
-    letterSpacing: "0.08em",
-    textTransform: "uppercase",
-    color: COLORS.muted,
-    marginBottom: 12,
-    fontWeight: 700,
-  },
-  sectionBlock: {
-    marginBottom: 20,
-  },
-  grid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))",
-    gap: 12,
-  },
-  card: {
-    background: COLORS.surface,
-    border: `1px solid ${COLORS.border}`,
-    borderRadius: 12,
-    padding: 14,
-    cursor: "pointer",
-  },
-  cardSoon: {
-    opacity: 0.75,
-    cursor: "default",
-  },
-  cardName: {
-    fontSize: 15,
-    fontWeight: 700,
-    marginBottom: 4,
-  },
-  cardDesc: {
-    fontSize: 12,
-    color: COLORS.muted,
-    lineHeight: 1.5,
-  },
-  statusBadge: {
-    display: "inline-block",
-    fontSize: 10,
-    fontWeight: 700,
-    borderRadius: 999,
-    padding: "2px 8px",
-    marginBottom: 8,
-    textTransform: "uppercase",
-    letterSpacing: "0.06em",
-  },
-  toolFrame: {
-    minHeight: "calc(100vh - 52px)",
-  },
-  backButton: {
-    border: `1px solid ${COLORS.border}`,
-    background: COLORS.surface,
-    borderRadius: 8,
-    padding: "6px 10px",
-    color: COLORS.text,
-    cursor: "pointer",
-    fontSize: 12,
-    fontWeight: 600,
-  },
 };
 
 function getStatusMeta(status) {
@@ -205,24 +66,44 @@ function getStatusMeta(status) {
 }
 
 export default function MenuAppLauncher() {
-  const [activeTool, setActiveTool] = useState(null);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const params = useParams();
+
   const currentYear = new Date().getFullYear();
   const allApps = APPS.flatMap((section) => section.apps || []);
-  const activeApp = allApps.find((app) => app.id === activeTool);
+
+  const pathSegments = location.pathname.split("/").filter(Boolean);
+  const toolIdFromPath = pathSegments[0];
+  const activeApp = allApps.find((app) => app.id === toolIdFromPath);
   const ActiveComponent = activeApp?.component;
+
+  const handleOpenTool = (toolId) => {
+    navigate(`/${toolId}`);
+  };
+
+  const handleBackToPortal = () => {
+    navigate(`/`);
+  };
 
   if (ActiveComponent) {
     return (
       <div style={styles.page}>
         <div style={styles.topbar}>
-          <button style={styles.backButton} onClick={() => setActiveTool(null)}>
+          <button style={styles.backButton} onClick={handleBackToPortal}>
             Back to portal
           </button>
           <div style={styles.topbarTitle}>{activeApp.name}</div>
           <div style={styles.topbarSubtitle}>SameSameButDifferent</div>
         </div>
         <div style={styles.toolFrame}>
-          <ActiveComponent />
+          <Suspense
+            fallback={
+              <div style={styles.loadingFrame}>Loading {activeApp.name}...</div>
+            }
+          >
+            <ActiveComponent />
+          </Suspense>
         </div>
       </div>
     );
@@ -251,7 +132,7 @@ export default function MenuAppLauncher() {
                       ...(!isClickable ? styles.cardSoon : {}),
                     }}
                     onClick={() => {
-                      if (app.component) setActiveTool(app.id);
+                      if (app.component) handleOpenTool(app.id);
                       if (statusMeta.label === "Affiliate") {
                         window.open(app.affiliateLink, "_blank");
                       }

@@ -1,6 +1,11 @@
-import React from 'react'
-import { createRoot } from 'react-dom/client'
-import MenuAppLauncher from './menu-app-launcher.jsx'
+import React from "react";
+import { createRoot } from "react-dom/client";
+import { BrowserRouter } from "react-router-dom";
+import MenuAppLauncher from "./menu-app-launcher.jsx";
 
-const root = createRoot(document.getElementById('root'))
-root.render(<MenuAppLauncher />)
+const root = createRoot(document.getElementById("root"));
+root.render(
+  <BrowserRouter>
+    <MenuAppLauncher />
+  </BrowserRouter>,
+);

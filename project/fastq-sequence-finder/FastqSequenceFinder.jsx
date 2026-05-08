@@ -1007,22 +1007,22 @@ const S = {
   },
   sumRow: {
     display: "flex",
-    background: "rgba(0, 0, 0, 0.42)",
+    background: "rgba(79, 79, 79, 0.42)",
     borderRadius: 4,
     overflow: "hidden",
-    border: "1px solid rgba(0,255,157,0.07)",
+    border: "2px solid rgba(0, 255, 157, 0.68)",
     marginBottom: 12,
   },
   stat: { flex: 1, padding: "10px 8px", textAlign: "center" },
-  sN: { fontSize: 19, fontWeight: 700, color: "#00ff9d" },
+  sN: { fontSize: 19, fontWeight: 800, color: "#03915b" },
   sL: {
     fontSize: 10,
-    color: "rgba(107, 120, 113, 0.57)",
+    color: "rgba(44, 49, 46, 0.9)",
     letterSpacing: "0.14em",
     textTransform: "uppercase",
     marginTop: 2,
   },
-  sdiv: { width: 1, background: "rgba(0,255,157,0.07)" },
+  sdiv: { width: 1, background: "rgba(185, 188, 187, 0.5)" },
   mList: {
     display: "flex",
     flexDirection: "column",
@@ -1031,28 +1031,28 @@ const S = {
     overflowY: "auto",
   },
   mCard: {
-    background: "rgba(0,0,0,0.2)",
+    background: "rgba(187, 185, 185, 0.2)",
     border: "1px solid rgba(0,255,157,0.07)",
     borderRadius: 4,
     padding: "7px 9px",
   },
   mHdr: {
-    fontSize: 12,
+    fontSize: 14,
     color: "rgba(34, 34, 34, 0.65)", // Darker match header
     marginBottom: 4,
     overflow: "hidden",
     textOverflow: "ellipsis",
     whiteSpace: "nowrap",
   },
-  mSeq: { fontSize: 11, wordBreak: "break-all", lineHeight: 1.55 },
-  seqT: { color: "rgba(188,204,196,0.4)" },
+  mSeq: { fontSize: 14, wordBreak: "break-all", lineHeight: 1.55 },
+  seqT: { color: "rgba(49, 58, 52, 0.87)" },
   seqH: {
-    background: "rgba(0,255,157,0.18)",
-    color: "#00ff9d",
+    background: "rgba(43, 58, 58, 0.23)",
+    color: "#04994c",
     borderRadius: 2,
     padding: "0 1px",
   },
-  mTag: { fontSize: 9, color: "rgba(34,34,34,0.6)", marginTop: 3 },
+  mTag: { fontSize: 14, color: "rgba(34, 34, 34, 0.79)", marginTop: 3 },
   noMatch: {
     fontSize: 12,
     color: "rgba(34,34,34,0.4)", // Darker no match text
@@ -1060,7 +1060,7 @@ const S = {
     padding: "14px 0",
   },
   trunc: {
-    fontSize: 10,
+    fontSize: 14,
     color: "rgba(34,34,34,0.4)", // Darker truncation text
     textAlign: "center",
     padding: "5px 0",
@@ -1079,7 +1079,7 @@ const S = {
   eIco: { fontSize: 30, color: "rgba(0,255,157,0.1)" },
   eTxt: {
     fontSize: 11,
-    color: "rgba(34,34,34,0.3)", // Darker empty state text
+    color: "rgba(34, 34, 34, 0.68)", // Darker empty state text
     textAlign: "center",
     maxWidth: 260,
     lineHeight: 1.65,

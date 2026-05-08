@@ -83,6 +83,16 @@ export const APPS = [
         ),
       },
       {
+        id: "fastq-sequence-finder",
+        name: "FASTQ Sequence Finder",
+        version: "0.0.1",
+        desc: "Use multiple web workers to search sequenced reads in FASTQ or FASTQ.GZ files",
+        status: "experimental",
+        component: lazyTool(
+          () => import("./fastq-sequence-finder/FastqSequenceFinder.jsx"),
+        ),
+      },
+      {
         id: "dna-sequence-visualizer",
         name: "DNA Sequence Visualizer",
         version: "0.1.0",

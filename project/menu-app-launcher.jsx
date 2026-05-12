@@ -88,7 +88,15 @@ export default function MenuAppLauncher() {
 
   if (ActiveComponent) {
     return (
-      <div style={{ ...styles.page, height: "100vh", overflow: "hidden", display: "flex", flexDirection: "column" }}>
+      <div
+        style={{
+          ...styles.page,
+          height: "100vh",
+          overflow: "hidden",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
         <div style={styles.topbar}>
           <button style={styles.backButton} onClick={handleBackToPortal}>
             Back to portal
@@ -113,6 +121,19 @@ export default function MenuAppLauncher() {
     <div style={styles.page}>
       <div style={styles.topbar}>
         <div style={styles.topbarTitle}>SameSameButDifferent</div>
+        <div
+          style={{
+            fontSize: 13,
+            color: COLORS.accent,
+            fontStyle: "italic",
+            fontFamily: "Georgia, 'Times New Roman', serif",
+            letterSpacing: "0.01em",
+            opacity: 0.85,
+          }}
+        >
+          ... A Collection of In-Browser Tools &mdash; No Uploads, No Software
+          Installs &mdash; Free-to-Use
+        </div>
         <div style={styles.topbarSubtitle}>SSBD - Data Validation Portal</div>
       </div>
       <main style={styles.home}>

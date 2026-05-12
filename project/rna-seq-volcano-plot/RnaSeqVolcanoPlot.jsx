@@ -430,8 +430,7 @@ export default function VolcanoPlot() {
     const h = +svgEl.getAttribute("height");
     const scale = EXPORT_SCALE;
     const svgData = new XMLSerializer().serializeToString(svgEl);
-    const blob = new Blob([svgData], { type: "image/svg+xml;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
+    const url = "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(svgData)));
     const img = new Image();
     img.onload = () => {
       const canvas = document.createElement("canvas");
@@ -442,7 +441,6 @@ export default function VolcanoPlot() {
       ctx.fillStyle = COLORS.bg;
       ctx.fillRect(0, 0, w, h);
       ctx.drawImage(img, 0, 0, w, h);
-      URL.revokeObjectURL(url);
       const mime = format === "jpg" ? "image/jpeg" : "image/png";
       const a = document.createElement("a");
       a.href = canvas.toDataURL(mime, 0.95);

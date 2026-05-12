@@ -48,6 +48,16 @@ export const APPS = [
         status: "soon",
         component: null,
       },
+      {
+        id: "pdf-table-extractor",
+        name: "PDF Table Extractor",
+        version: "0.1.0",
+        desc: "Extract tables from PDF files and convert them to CSV or XLSX",
+        status: "experimental",
+        component: lazyTool(
+          () => import("./pdf-table-extractor/PdfTableExtractor.jsx"),
+        ),
+      },
     ],
   },
   {
@@ -100,6 +110,16 @@ export const APPS = [
         status: "experimental",
         component: lazyTool(
           () => import("./dna-sequence-visualizer/DnaSequenceVisualizer.jsx"),
+        ),
+      },
+      {
+        id: "rna-seq-volcano-plot",
+        name: "RNA-Seq Volcano Plot",
+        version: "0.1.0",
+        desc: "Create interactive volcano plots from RNA-Seq data (CSV or XLSX)",
+        status: "beta",
+        component: lazyTool(
+          () => import("./rna-seq-volcano-plot/RnaSeqVolcanoPlot.jsx"),
         ),
       },
     ],

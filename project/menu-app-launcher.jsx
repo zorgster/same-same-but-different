@@ -88,7 +88,7 @@ export default function MenuAppLauncher() {
 
   if (ActiveComponent) {
     return (
-      <div style={styles.page}>
+      <div style={{ ...styles.page, height: "100vh", overflow: "hidden", display: "flex", flexDirection: "column" }}>
         <div style={styles.topbar}>
           <button style={styles.backButton} onClick={handleBackToPortal}>
             Back to portal
@@ -96,7 +96,7 @@ export default function MenuAppLauncher() {
           <div style={styles.topbarTitle}>{activeApp.name}</div>
           <div style={styles.topbarSubtitle}>SameSameButDifferent</div>
         </div>
-        <div style={styles.toolFrame}>
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
           <Suspense
             fallback={
               <div style={styles.loadingFrame}>Loading {activeApp.name}...</div>

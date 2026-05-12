@@ -29,3 +29,6 @@ vite.svg
 .idea/
 .DS_Store
 Thumbs.db
+
+# Example Files
+example_files/

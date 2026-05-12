@@ -9,16 +9,19 @@
     "test": "vitest"
   },
   "dependencies": {
+    "d3": "^7.9.0",
     "fflate": "^0.8.2",
     "jszip": "^3.10.1",
     "lucide-react": "^0.300.0",
     "pako": "^2.1.0",
     "papaparse": "^5.5.3",
+    "pdfjs-dist": "^5.4.624",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-dropzone": "^15.0.0",
     "react-router-dom": "^7.14.2",
     "react-use": "^17.6.0",
+    "tesseract.js": "^7.0.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

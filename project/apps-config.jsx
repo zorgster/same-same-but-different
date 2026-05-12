@@ -116,7 +116,7 @@ export const APPS = [
         id: "rna-seq-volcano-plot",
         name: "RNA-Seq Volcano Plot",
         version: "0.1.0",
-        desc: "Create interactive volcano plots from RNA-Seq data (CSV or XLSX)",
+        desc: "Create interactive differential expression volcano plots from RNA-Seq data (CSV or TSV) [Ensembl ID-based]",
         status: "beta",
         component: lazyTool(
           () => import("./rna-seq-volcano-plot/RnaSeqVolcanoPlot.jsx"),

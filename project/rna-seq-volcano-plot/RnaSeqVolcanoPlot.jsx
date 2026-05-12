@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import * as d3 from "d3";
+import Papa from "papaparse";
 import { COLORS, MONO_FONT } from "../styles/light-theme";
 import fetchWithTimeout from "../dna-sequence-visualizer/helper-functions";
 import MoreInfoWidget from "./widgets/MoreInfoWidget";
@@ -31,10 +32,11 @@ function useDebounced(value, ms = 80) {
 function parseDeseq2(text) {
   const firstLine = text.split("\n")[0];
   const delim = firstLine.includes("\t") ? "\t" : ",";
-  const parsed = delim === "\t" ? d3.tsvParse(text) : d3.csvParse(text);
+  const result = Papa.parse(text, { header: true, delimiter: delim, skipEmptyLines: true });
+  const parsed = result.data;
   if (!parsed.length) return null;
 
-  const cols = parsed.columns;
+  const cols = result.meta.fields;
   const find = (...names) =>
     cols.find((c) => names.some((n) => c.toLowerCase() === n.toLowerCase()));
 

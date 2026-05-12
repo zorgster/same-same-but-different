@@ -12,7 +12,7 @@
   for = "/*"
   [headers.values]
     Strict-Transport-Security = "max-age=31536000; includeSubDomains"
-    Content-Security-Policy = "default-src 'self'; connect-src 'self' https://rest.ensembl.org; script-src 'self' 'sha256-ae0255937f7d6ecb02437e0e3dff45871fb615964d02285b6e18acdd302e3ca3' 'sha256-22b340122ff526d894f4cc1ffd6f748dc360ebb54b69c6b600d0ed4aa7ba65ab' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; connect-src 'self' https://rest.ensembl.org https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; worker-src 'self' blob:;"
+    Content-Security-Policy = "default-src 'self'; connect-src 'self' https://rest.ensembl.org; script-src 'self' 'sha256-ae0255937f7d6ecb02437e0e3dff45871fb615964d02285b6e18acdd302e3ca3' 'sha256-22b340122ff526d894f4cc1ffd6f748dc360ebb54b69c6b600d0ed4aa7ba65ab' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; connect-src 'self' https://rest.ensembl.org https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; worker-src 'self' blob:;"
     Referrer-Policy = "strict-origin-when-cross-origin"
     Permissions-Policy = "geolocation=(), microphone=(), camera=(), payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=()"
     X-Content-Type-Options = "nosniff"

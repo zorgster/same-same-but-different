@@ -3,6 +3,9 @@
     {
       "path": ".",
     },
+    {
+      "path": "../../Rust/FastqReader",
+    },
   ],
   "settings": {
     "editor.formatOnSave": true,

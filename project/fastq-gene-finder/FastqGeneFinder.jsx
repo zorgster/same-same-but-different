@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { FASTQ_GENE_FINDER_CONFIG } from "./fastq-gene-finder-config.js";
 import FileDropZone from "./widgets/FileDropZone.jsx";
 import PileupView from "./widgets/PileupView.jsx";
@@ -31,39 +31,60 @@ function makeSeedPositions(
 /* ============================================================
    STREAMING FASTQ.GZ PARSER (memory-safe)
 ============================================================ */
-function getFastqReadableStream(file) {
-  const stream = file.stream();
+function concat(a, b) {
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a, 0);
+  out.set(b, a.length);
+  return out;
+}
+
+function getFastqReadableStream(file, onCompressedBytes) {
+  const raw = file.stream();
   if (file.name.toLowerCase().endsWith(".gz")) {
-    return stream.pipeThrough(new DecompressionStream("gzip"));
+    let count = 0;
+    const counter = new TransformStream({
+      transform(chunk, controller) {
+        count += chunk.byteLength;
+        onCompressedBytes?.(count);
+        controller.enqueue(chunk);
+      },
+    });
+    return raw
+      .pipeThrough(counter)
+      .pipeThrough(new DecompressionStream("gzip"));
   }
-  return stream;
+  return raw;
 }
 
 async function readFirstFastqSequence(file) {
   const stream = getFastqReadableStream(file);
   const reader = stream.getReader();
-  const decoder = new TextDecoder();
-
-  let partial = "";
-  let lineBuffer = [];
+  let lineCount = 0;
+  let remainder = new Uint8Array(0);
 
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
 
-    partial += decoder.decode(value, { stream: true });
+    const chunk = remainder.length ? concat(remainder, value) : value;
+    let segStart = 0;
 
-    const lines = partial.split(/\r?\n/);
-    partial = lines.pop();
-
-    for (const line of lines) {
-      lineBuffer.push(line);
-
-      if (lineBuffer.length === 4) {
-        await reader.cancel();
-        return lineBuffer[1].trim();
+    for (let pos = 0; pos < chunk.length; pos++) {
+      if (chunk[pos] === 10) {
+        // \n
+        if (lineCount === 1) {
+          // end of sequence line — trim \r for CRLF files
+          let seqLen = pos - segStart;
+          if (seqLen > 0 && chunk[pos - 1] === 13) seqLen--;
+          await reader.cancel();
+          return seqLen;
+        }
+        lineCount++;
+        segStart = pos + 1;
       }
     }
+
+    remainder = chunk.subarray(segStart);
   }
 
   throw new Error("Selected file does not contain a complete FASTQ record");
@@ -76,29 +97,38 @@ async function streamFastq({
   abortRef,
   onProgress,
   tick,
+  batchSize = 200,
 }) {
   const totalBytes = file.size;
   let bytesRead = 0;
-  const stream = getFastqReadableStream(file);
+  let compressedBytesRead = 0;
+  const isCompressed = file.name.toLowerCase().endsWith(".gz");
+  const stream = getFastqReadableStream(
+    file,
+    isCompressed
+      ? (n) => {
+          compressedBytesRead = n;
+        }
+      : null,
+  );
   const reader = stream.getReader();
-  const decoder = new TextDecoder();
 
-  let partial = "";
-  let lineBuffer = [];
+  let lineCount = 0;
+  let seqLine = null; // Uint8Array for current sequence line
   let readIndex = 0;
+  let remainder = new Uint8Array(0);
+  let lastProgressReport = 0; // throttle setProgress to ~10 calls/s
 
   try {
     while (true) {
       const { value, done } = await reader.read();
       if (done) break;
 
-      // Abort requested
       if (abortRef && abortRef.current) {
         await reader.cancel();
         return { done: true };
       }
 
-      // Pause support: yield until unpaused or aborted
       if (pauseRef && pauseRef.current) {
         while (pauseRef.current && !(abortRef && abortRef.current)) {
           await tick();
@@ -109,74 +139,61 @@ async function streamFastq({
         }
       }
 
-      // Update progress
-      bytesRead +=
-        value && (value.byteLength || value.length)
-          ? value.byteLength || value.length
-          : 0;
-      const isCompressed = file.name.toLowerCase().endsWith(".gz");
-      if (onProgress)
-        onProgress(bytesRead, isCompressed ? null : totalBytes, file.name);
-
-      // Decode chunk and append to partial buffer
-      const text = decoder.decode(value, { stream: true });
-      partial += text;
-
-      // Protect against non-string partial
-      if (typeof partial !== "string") partial = String(partial || "");
-
-      const lines = partial.split(/\r?\n/);
-      partial = lines.pop();
-
-      for (const line of lines) {
-        lineBuffer.push(line);
-
-        if (lineBuffer.length === 4) {
-          const seq = (lineBuffer[1] || "").trim();
-          try {
-            onRead(seq, readIndex);
-          } catch (err) {
-            // swallow handler errors so streaming can continue or be aborted upstream
-            console.error("onRead handler threw:", err);
-          }
-          readIndex++;
-          lineBuffer = [];
-
-          // Yield to event loop periodically to keep UI responsive
-          if (readIndex % 10 === 0) {
-            await tick();
-          }
+      bytesRead += value ? value.byteLength : 0;
+      if (onProgress) {
+        const now = Date.now();
+        if (now - lastProgressReport >= 100) {
+          onProgress(
+            isCompressed ? compressedBytesRead : bytesRead,
+            totalBytes,
+            file.name,
+          );
+          lastProgressReport = now;
         }
       }
-    }
 
-    // Flush any remaining decoded text
-    const finalText = decoder.decode();
-    if (finalText) {
-      partial += finalText;
-      const lines = partial.split(/\r?\n/);
-      partial = lines.pop();
-      for (const line of lines) {
-        lineBuffer.push(line);
-        if (lineBuffer.length === 4) {
-          const seq = (lineBuffer[1] || "").trim();
-          try {
-            onRead(seq, readIndex);
-          } catch (err) {
-            console.error("onRead handler threw:", err);
+      const chunk = remainder.length ? concat(remainder, value) : value;
+      let segStart = 0;
+
+      for (let pos = 0; pos < chunk.length; pos++) {
+        if (chunk[pos] === 10) {
+          // newline byte
+          const lineInRecord = lineCount % 4;
+
+          if (lineInRecord === 1) {
+            // sequence line — copy bytes (chunk may be replaced next iteration)
+            const end = pos > segStart && chunk[pos - 1] === 13 ? pos - 1 : pos;
+            seqLine = chunk.slice(segStart, end);
+          } else if (lineInRecord === 3 && seqLine) {
+            // quality line — emit the read
+            const end = pos > segStart && chunk[pos - 1] === 13 ? pos - 1 : pos;
+            const qualLine = chunk.slice(segStart, end);
+            try {
+              onRead(seqLine, qualLine, readIndex);
+            } catch (err) {
+              console.error("onRead handler threw:", err);
+            }
+            readIndex++;
+            seqLine = null;
+            if (readIndex % batchSize === 0) await tick();
           }
-          readIndex++;
-          lineBuffer = [];
-          if (readIndex % 10 === 0) await tick();
+
+          lineCount++;
+          segStart = pos + 1;
         }
       }
+
+      remainder = chunk.subarray(segStart);
     }
 
-    // If we ended with a complete record in buffer, emit it
-    if (lineBuffer.length === 4) {
-      const seq = (lineBuffer[1] || "").trim();
+    // Handle file that doesn't end with a newline (emit final quality line if complete)
+    if (remainder.length > 0 && lineCount % 4 === 3 && seqLine) {
+      const qualLine =
+        remainder[remainder.length - 1] === 13
+          ? remainder.slice(0, remainder.length - 1)
+          : remainder;
       try {
-        onRead(seq, readIndex);
+        onRead(seqLine, qualLine, readIndex);
       } catch (err) {
         console.error("onRead handler threw:", err);
       }
@@ -214,49 +231,40 @@ function generateSeedArrays(
   );
 }
 
-function reverseComplement(seq) {
-  const complement = {
-    A: "T",
-    T: "A",
-    C: "G",
-    G: "C",
-    U: "A",
-    a: "t",
-    t: "a",
-    c: "g",
-    g: "c",
-    u: "a",
-    N: "N",
-    n: "n",
-  };
-  let out = "";
-  for (let i = seq.length - 1; i >= 0; i--) {
-    const ch = seq[i];
-    out += complement[ch] || "N";
-  }
-  return out;
-}
-
 // Build a gene-side sparse-mer index for each seed array.
 // Each index maps the sampled bases (concatenated) -> array of window start positions in the gene
+// 2-bit encoding: A=0, T=1, C=2, G=3 (N/other=0)
+const GENE_BASE_BITS = { A: 0, T: 1, C: 2, G: 3, a: 0, t: 1, c: 2, g: 3 };
+const KEY_BITS_TO_CHAR = ["A", "T", "C", "G"];
+
+function decodeNumericKey(key, len) {
+  let s = "";
+  let k = key;
+  for (let i = 0; i < len; i++) {
+    s = KEY_BITS_TO_CHAR[k & 3] + s;
+    k = Math.floor(k / 4);
+  }
+  return s;
+}
+
 function buildSeedIndices(geneSequence, readLength, seedArrays) {
   const maxStart = Math.max(0, geneSequence.length - readLength);
   return seedArrays.map((seed) => {
-    const map = new Map();
+    const map = new Map(); // Map<number, number[]>
     for (let pos = 0; pos <= maxStart; pos++) {
       let ok = true;
-      let key = "";
+      let key = 0;
       for (const idx of seed.positions) {
         const ch = geneSequence[pos + idx];
         if (!ch) {
           ok = false;
           break;
         }
-        key += ch;
+        key = key * 4 + (GENE_BASE_BITS[ch] ?? 0);
       }
       if (!ok) continue;
-      const arrPositions = map.get(key);
-      if (arrPositions) arrPositions.push(pos);
+      const hits = map.get(key);
+      if (hits) hits.push(pos);
       else map.set(key, [pos]);
     }
     return map;
@@ -331,7 +339,7 @@ function computeSeedStatsAsync(
           considerTop({
             seedId: seed.id,
             seedLabel: seed.label,
-            sampleKey: key,
+            sampleKey: decodeNumericKey(key, seed.positions.length),
             count,
             positions: positions.slice(0, 20),
           });
@@ -357,44 +365,6 @@ function computeSeedStatsAsync(
   });
 }
 
-// Score a read by looking up sparse-mer keys in each seed's index.
-function scoreReadUsingIndices(read, seedArrays, seedIndices, minSeedMatches) {
-  if (!seedIndices || !seedIndices.length) return [];
-  const posScores = new Map();
-  const posSeeds = new Map(); //track which seeds matched
-
-  for (let s = 0; s < seedArrays.length; s++) {
-    const seed = seedArrays[s];
-    const idxs = seed.positions;
-    let key = "";
-    for (const i of idxs) {
-      key += read[i] || "";
-    }
-
-    const map = seedIndices[s];
-    const hits = map?.get(key);
-    if (hits) {
-      for (const pos of hits) {
-        posScores.set(pos, (posScores.get(pos) || 0) + 1);
-        if (!posSeeds.has(pos)) posSeeds.set(pos, []);
-        posSeeds.get(pos).push(seed.id);
-      }
-    }
-
-    const bestPossible = seedArrays.length - s - 1;
-    const currentBest = Math.max(...posScores.values(), 0);
-    if (currentBest + bestPossible < minSeedMatches) {
-      return [];
-    }
-  }
-
-  const out = [];
-  for (const [pos, score] of posScores.entries()) {
-    out.push({ pos, score, seedIds: posSeeds.get(pos) });
-  }
-  return out;
-}
-
 /* ============================================================
    MAIN COMPONENT: FastqGeneFinder
 ============================================================ */
@@ -409,6 +379,7 @@ export default function FastqGeneFinderApp() {
   const [progress, setProgress] = useState({ done: 0, total: 0, fileName: "" });
   const [keptCount, setKeptCount] = useState(0);
   const [discardedCount, setDiscardedCount] = useState(0);
+  const [processingFinished, setProcessingFinished] = useState(false);
   const [showPileup, setShowPileup] = useState(false);
   const pileupWindowSizes = [100, 125, 150, 175, 200, 225, 250];
   const [pileupWindowSize, setPileupWindowSize] = useState(150);
@@ -417,10 +388,63 @@ export default function FastqGeneFinderApp() {
     perSeedStats: [],
     topUniqueSamples: [],
   });
+  const [workerCount, setWorkerCount] = useState(() =>
+    Math.max(1, Math.floor((navigator.hardwareConcurrency || 4) / 2) - 1),
+  );
+  const [workerStates, setWorkerStates] = useState([]);
 
   const pauseRef = useRef(false);
   const abortRef = useRef(false);
   const indicesRef = useRef(null);
+  const workersRef = useRef([]);
+  const batchesDispatchedRef = useRef(0);
+  const batchesReturnedRef = useRef(0);
+  const streamDoneRef = useRef(false);
+  const pendingBatchRef = useRef([]); // queue of pre-packaged batch arrays
+  const currentBatchRef = useRef([]); // batch being assembled
+  const idleWorkersRef = useRef([]);
+  const pendingMatchesRef = useRef([]); // match accumulator — flushed to state at most 2×/s
+  const nextBatchIdRef = useRef(0);
+  const totalReadsRef = useRef(0);
+  const startTimeRef = useRef(null);
+  const pauseStartTimeRef = useRef(null);
+  const totalPausedMsRef = useRef(0);
+
+  const [, setTimerTick] = useState(0);
+  const [finalElapsedMs, setFinalElapsedMs] = useState(null);
+
+  useEffect(() => {
+    return () => {
+      workersRef.current.forEach((w) => w.terminate());
+      workersRef.current = [];
+    };
+  }, []);
+
+  useEffect(() => {
+    if (status !== "processing") return;
+    const id = setInterval(() => setTimerTick((t) => t + 1), 500);
+    return () => clearInterval(id);
+  }, [status]);
+
+  const elapsedMs =
+    finalElapsedMs != null
+      ? finalElapsedMs
+      : startTimeRef.current != null
+        ? Math.max(
+            0,
+            Date.now() -
+              startTimeRef.current -
+              totalPausedMsRef.current -
+              (pauseStartTimeRef.current != null
+                ? Date.now() - pauseStartTimeRef.current
+                : 0),
+          )
+        : 0;
+  const totalReadsDisplay = totalReadsRef.current;
+  const readsPerSec =
+    elapsedMs > 500 && totalReadsDisplay > 0
+      ? Math.round(totalReadsDisplay / (elapsedMs / 1000))
+      : null;
 
   const tick = () => new Promise((r) => setTimeout(r, 0));
 
@@ -431,18 +455,20 @@ export default function FastqGeneFinderApp() {
     !!seedArrays.length &&
     status !== "processing";
 
+  /* ---------------- Pileup (only active after processing completes) ---------------- */
   const pileupStep = 25;
   const pileupMinScore = Math.max(
     1,
     Math.ceil((seedArrays?.length || 1) * 0.7),
   );
-  const pileupReads = matchingReads.filter(
-    (read) => (read.score ?? 0) >= pileupMinScore,
-  );
+  const pileupReads = processingFinished
+    ? matchingReads.filter((read) => (read.score ?? 0) >= pileupMinScore)
+    : [];
 
   const getReadStart = (read) => read.position ?? read.positions?.[0];
 
   const movePileupWindow = (direction) => {
+    if (!processingFinished) return;
     const maxStart = Math.max(0, geneSequence.length - pileupWindowSize);
     setPileupWindowStart((current) =>
       Math.max(0, Math.min(maxStart, current + direction * pileupStep)),
@@ -450,14 +476,17 @@ export default function FastqGeneFinderApp() {
   };
 
   const jumpPileupToStart = () => {
+    if (!processingFinished) return;
     setPileupWindowStart(0);
   };
 
   const jumpPileupToEnd = () => {
+    if (!processingFinished) return;
     setPileupWindowStart(Math.max(0, geneSequence.length - pileupWindowSize));
   };
 
   const jumpPileupToFirstMatch = () => {
+    if (!processingFinished) return;
     const starts = pileupReads
       .map(getReadStart)
       .filter((pos) => Number.isFinite(pos));
@@ -470,6 +499,7 @@ export default function FastqGeneFinderApp() {
   };
 
   const jumpPileupToNextMatch = () => {
+    if (!processingFinished) return;
     const starts = pileupReads
       .map(getReadStart)
       .filter((pos) => Number.isFinite(pos));
@@ -545,8 +575,8 @@ export default function FastqGeneFinderApp() {
 
     setTimeout(async () => {
       try {
-        const seq = await readFirstFastqSequence(file);
-        setReadLength(seq.length);
+        const seqLen = await readFirstFastqSequence(file);
+        setReadLength(seqLen);
         setStatus("awaiting-gene");
       } catch {
         setReadLength(null);
@@ -556,100 +586,232 @@ export default function FastqGeneFinderApp() {
   }, []);
 
   /* ---------------- Processing ---------------- */
+  const BATCH_SIZE = 50000;
+
   const handleProcess = useCallback(async () => {
     if (!files.length || !geneSequence || !seedArrays.length) return;
 
     const file = files[0];
     setStatus("processing");
+    setProcessingFinished(false);
     setMatchingReads([]);
     setKeptCount(0);
     setDiscardedCount(0);
     pauseRef.current = false;
     abortRef.current = false;
 
-    // Store file info for display
-    const fileName = file.name;
+    batchesDispatchedRef.current = 0;
+    batchesReturnedRef.current = 0;
+    streamDoneRef.current = false;
+    pendingBatchRef.current = [];
+    currentBatchRef.current = [];
+    idleWorkersRef.current = [];
+    pendingMatchesRef.current = [];
+    nextBatchIdRef.current = 0;
+    totalReadsRef.current = 0;
+    startTimeRef.current = Date.now();
+    pauseStartTimeRef.current = null;
+    totalPausedMsRef.current = 0;
+    setFinalElapsedMs(null);
 
-    // Use prebuilt seed indices to avoid scanning the whole gene per read
     const seedIndices = indicesRef.current;
-
-    // For .gz files, we can't know decompressed size upfront, so track decompressed bytes instead
-    const isCompressed = file.name.toLowerCase().endsWith(".gz");
-    const totalBytes = isCompressed ? null : file.size;
-
-    // Local accumulators for streaming/flushing
-    let flushBuffer = [];
-
-    const flush = () => {
-      if (!flushBuffer.length) return;
-      const toFlush = flushBuffer.splice(0, flushBuffer.length);
-      setMatchingReads((prev) => prev.concat(toFlush));
-    };
-
-    const flushIfNeeded = () => {
-      if (flushBuffer.length >= 10) {
-        flush();
-      }
-    };
-
-    // minimum seed matches required (50% of seed arrays)
     const minSeedMatches = Math.max(
       1,
       Math.ceil((seedArrays?.length || 1) * 0.5),
     );
+    const actualWorkerCount = Math.max(1, workerCount);
 
-    const handleRead = (seq, index) => {
-      const scoreCandidate = (candidateSeq, orientation) => {
-        const all = scoreReadUsingIndices(
-          candidateSeq,
-          seedArrays,
-          seedIndices,
-          minSeedMatches,
-        );
-        return { seq: candidateSeq, orientation, all };
-      };
+    setWorkerStates(
+      Array.from({ length: actualWorkerCount }, (_, i) => ({
+        id: i,
+        status: "idle",
+        batchesDone: 0,
+        matchesFound: 0,
+      })),
+    );
 
-      const candidates = [
-        scoreCandidate(seq, "forward"),
-        scoreCandidate(reverseComplement(seq), "reverse"),
-      ].filter(Boolean);
+    // Spawn workers
+    const workers = Array.from(
+      { length: actualWorkerCount },
+      () =>
+        new Worker(new URL("./fastq-search.worker.js", import.meta.url), {
+          type: "module",
+        }),
+    );
+    workersRef.current = workers;
 
-      let keptThis = false;
+    // Batch dispatch helpers (defined before wiring handlers so they close over workers)
+    // pendingBatchRef holds a queue of pre-packaged batch arrays — shift() on a small
+    // queue is O(queue_length), not O(total_reads), unlike splice on a flat read array.
+    const dispatchBatch = (workerIdx) => {
+      const reads = pendingBatchRef.current.shift();
+      const batchId = nextBatchIdRef.current++;
+      batchesDispatchedRef.current++;
+      workers[workerIdx].postMessage({
+        type: "batch",
+        payload: { batchId, reads },
+      });
+    };
 
-      for (const candidate of candidates) {
-        for (const m of candidate.all) {
-          if (m.score >= minSeedMatches) {
-            const obj = {
-              read: candidate.seq,
-              orientation: candidate.orientation,
-              readNumber: index + 1,
-              fastqHeaderLine: index * 4 + 1,
-              fastqSequenceLine: index * 4 + 2,
-              position: m.pos,
-              positions: [m.pos],
-              score: m.score,
-              scores: [m.score],
-              index,
-              seedIds: m.seedIds || [],
-            };
-            flushBuffer.push(obj);
-            flushIfNeeded();
-            keptThis = true;
-          }
-        }
-      }
-
-      if (keptThis) {
-        setKeptCount((p) => p + 1);
-      } else {
-        setDiscardedCount((p) => p + 1);
+    const drainPendingBatches = () => {
+      while (
+        pendingBatchRef.current.length > 0 &&
+        idleWorkersRef.current.length > 0
+      ) {
+        const workerIdx = idleWorkersRef.current.shift();
+        dispatchBatch(workerIdx);
       }
     };
 
+    const flushFinalBatch = () => {
+      // Package any partial final batch that hasn't reached BATCH_SIZE
+      if (currentBatchRef.current.length > 0) {
+        pendingBatchRef.current.push(currentBatchRef.current);
+        currentBatchRef.current = [];
+      }
+      while (
+        pendingBatchRef.current.length > 0 &&
+        idleWorkersRef.current.length > 0
+      ) {
+        const workerIdx = idleWorkersRef.current.shift();
+        dispatchBatch(workerIdx);
+      }
+    };
+
+    const checkDone = () => {
+      if (
+        streamDoneRef.current &&
+        currentBatchRef.current.length === 0 &&
+        pendingBatchRef.current.length === 0 &&
+        batchesDispatchedRef.current === batchesReturnedRef.current
+      ) {
+        workersRef.current.forEach((w) => w.terminate());
+        workersRef.current = [];
+        syncMatchDisplay(true); // flush any buffered matches before marking done
+        setFinalElapsedMs(
+          startTimeRef.current != null
+            ? Date.now() - startTimeRef.current - totalPausedMsRef.current
+            : 0,
+        );
+        setWorkerStates((prev) => prev.map((w) => ({ ...w, status: "done" })));
+        setProcessingFinished(true);
+        setStatus("done");
+      }
+    };
+
+    // Per-worker counters (plain arrays, closed over by handlers) — synced to display at most 10×/s
+    const workerBatchDone = new Array(actualWorkerCount).fill(0);
+    const workerMatchFound = new Array(actualWorkerCount).fill(0);
+    let lastWorkerStateSync = 0;
+    let lastMatchFlush = 0;
+
+    const syncWorkerDisplay = () => {
+      const now = Date.now();
+      if (now - lastWorkerStateSync >= 100) {
+        lastWorkerStateSync = now;
+        setWorkerStates((prev) =>
+          prev.map((ws) => ({
+            ...ws,
+            batchesDone: workerBatchDone[ws.id],
+            matchesFound: workerMatchFound[ws.id],
+          })),
+        );
+      }
+    };
+
+    // Flush accumulated matches to React state at most 2×/s — keeps ResultsView/PileupView
+    // re-renders from competing with worker throughput
+    const syncMatchDisplay = (force = false) => {
+      const now = Date.now();
+      if (
+        (force || now - lastMatchFlush >= 500) &&
+        pendingMatchesRef.current.length > 0
+      ) {
+        lastMatchFlush = now;
+        const toAdd = pendingMatchesRef.current;
+        pendingMatchesRef.current = [];
+        setMatchingReads((prev) => prev.concat(toAdd));
+        setKeptCount((prev) => prev + toAdd.length);
+      }
+    };
+
+    // Wire message handlers and count ready workers
+    let readyCount = 0;
+    let resolveAllReady;
+    const allReadyPromise = new Promise((res) => {
+      resolveAllReady = res;
+    });
+
+    workers.forEach((w, i) => {
+      w.onmessage = ({ data }) => {
+        if (data.type === "ready") {
+          idleWorkersRef.current.push(i);
+          readyCount++;
+          if (readyCount === actualWorkerCount) resolveAllReady();
+          return;
+        }
+
+        if (data.type === "result") {
+          batchesReturnedRef.current++;
+          const { matches } = data;
+          workerBatchDone[i]++;
+          if (matches.length > 0) {
+            workerMatchFound[i] += matches.length;
+            pendingMatchesRef.current.push(...matches);
+          }
+          syncWorkerDisplay();
+          syncMatchDisplay();
+          idleWorkersRef.current.push(i);
+          drainPendingBatches();
+          checkDone();
+          return;
+        }
+
+        if (data.type === "error") {
+          batchesReturnedRef.current++;
+          setWorkerStates((prev) =>
+            prev.map((ws) => (ws.id === i ? { ...ws, status: "error" } : ws)),
+          );
+          idleWorkersRef.current.push(i);
+          drainPendingBatches();
+          checkDone();
+        }
+      };
+
+      w.onerror = () => {
+        batchesReturnedRef.current++;
+        setWorkerStates((prev) =>
+          prev.map((ws) => (ws.id === i ? { ...ws, status: "error" } : ws)),
+        );
+        idleWorkersRef.current.push(i);
+        drainPendingBatches();
+        checkDone();
+      };
+    });
+
+    // Init all workers
+    workers.forEach((w) =>
+      w.postMessage({
+        type: "init",
+        payload: { seedArrays, seedIndices, minSeedMatches },
+      }),
+    );
+    await allReadyPromise;
+
+    // Stream FASTQ, accumulate reads into batches
     await streamFastq({
       file,
-      fileName,
-      onRead: handleRead,
+      fileName: file.name,
+      batchSize: BATCH_SIZE,
+      onRead: (seqBytes, qualBytes, index) => {
+        totalReadsRef.current++;
+        currentBatchRef.current.push({ seqBytes, qualBytes, index });
+        if (currentBatchRef.current.length >= BATCH_SIZE) {
+          pendingBatchRef.current.push(currentBatchRef.current);
+          currentBatchRef.current = [];
+          drainPendingBatches();
+        }
+      },
       pauseRef,
       abortRef,
       onProgress: (done, total, fileName) =>
@@ -657,34 +819,51 @@ export default function FastqGeneFinderApp() {
       tick,
     });
 
-    // Final flush and completion
-    flush();
+    streamDoneRef.current = true;
 
     if (abortRef.current) {
-      setStatus("aborted");
+      // handleAbort already terminated workers and set status
       return;
     }
 
-    setStatus("done");
-  }, [files, geneSequence, seedArrays, readLength]);
+    flushFinalBatch();
+    checkDone();
+  }, [files, geneSequence, seedArrays, readLength, workerCount]);
 
   const handlePauseResume = () => {
     if (status === "processing") {
       pauseRef.current = true;
+      pauseStartTimeRef.current = Date.now();
       setStatus("paused");
     } else if (status === "paused") {
       pauseRef.current = false;
+      if (pauseStartTimeRef.current != null) {
+        totalPausedMsRef.current += Date.now() - pauseStartTimeRef.current;
+        pauseStartTimeRef.current = null;
+      }
       setStatus("processing");
     }
   };
 
   const handleAbort = () => {
     abortRef.current = true;
+    workersRef.current.forEach((w) => {
+      w.postMessage({ type: "abort" });
+      w.terminate();
+    });
+    workersRef.current = [];
+    setFinalElapsedMs(
+      startTimeRef.current != null
+        ? Date.now() - startTimeRef.current - totalPausedMsRef.current
+        : 0,
+    );
+    setProcessingFinished(true);
+    setStatus("aborted");
   };
 
   /* ---------------- Render ---------------- */
   return (
-    <div style={Styles.container}>
+    <div style={{ ...Styles.container, paddingBottom: "50vh" }}>
       <h2>Sparse Seed‑n‑Vote Gene Finder</h2>
       <h3>
         A tool for finding gene matches in FASTQ files using random sparse seed
@@ -715,7 +894,12 @@ export default function FastqGeneFinderApp() {
             canProcess={canProcess}
             progress={progress}
             keptCount={keptCount}
-            discardedCount={discardedCount}
+            totalReads={totalReadsDisplay}
+            elapsedMs={elapsedMs}
+            readsPerSec={readsPerSec}
+            workerCount={workerCount}
+            onWorkerCountChange={setWorkerCount}
+            workerStates={workerStates}
           />
         </div>
 
@@ -729,90 +913,87 @@ export default function FastqGeneFinderApp() {
       <div style={{ marginTop: "1rem" }}>
         <ResultsView matchingReads={matchingReads} seedArrays={seedArrays} />
 
-        {(status === "done" || status === "aborted") &&
-          matchingReads.length > 0 && (
-            <div style={{ marginTop: "1rem" }}>
-              <button onClick={() => setShowPileup((s) => !showPileup)}>
-                {showPileup ? "Hide Pileup" : "Show Pileup"}
-              </button>
+        {processingFinished && matchingReads.length > 0 && (
+          <div style={{ marginTop: "1rem" }}>
+            <button onClick={() => setShowPileup((s) => !showPileup)}>
+              {showPileup ? "Hide Pileup" : "Show Pileup"}
+            </button>
 
-              {showPileup && (
-                <div style={{ marginTop: "0.5rem" }}>
-                  <h3>
-                    Pileup for reads with score &gt; {pileupMinScore || 0}
-                  </h3>
-                  <div
-                    style={{
-                      display: "flex",
-                      gap: "0.5rem",
-                      marginBottom: "0.5rem",
-                    }}
-                  >
-                    <button onClick={jumpPileupToStart}>Gene Start</button>
-                    <button onClick={() => movePileupWindow(-2)}>
-                      {"<<"} Prev {2 * pileupStep} bp
-                    </button>
-                    <button onClick={() => movePileupWindow(-1)}>
-                      {"<"} Prev {pileupStep} bp
-                    </button>
-                    <button onClick={() => movePileupWindow(1)}>
-                      Next {pileupStep} bp {">"}
-                    </button>
-                    <button onClick={() => movePileupWindow(2)}>
-                      Next {2 * pileupStep} bp {">>"}
-                    </button>
-                    <button onClick={jumpPileupToEnd}>Gene End</button>
-                    <button onClick={jumpPileupToFirstMatch}>
-                      First Match in Gene
-                    </button>
-                    <button onClick={jumpPileupToNextMatch}>
-                      Next Matching Read
-                    </button>
+            {showPileup && (
+              <div style={{ marginTop: "0.5rem" }}>
+                <h3>Pileup for reads with score &gt; {pileupMinScore || 0}</h3>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "0.5rem",
+                    marginBottom: "0.5rem",
+                  }}
+                >
+                  <button onClick={jumpPileupToStart}>Gene Start</button>
+                  <button onClick={() => movePileupWindow(-2)}>
+                    {"<<"} Prev {2 * pileupStep} bp
+                  </button>
+                  <button onClick={() => movePileupWindow(-1)}>
+                    {"<"} Prev {pileupStep} bp
+                  </button>
+                  <button onClick={() => movePileupWindow(1)}>
+                    Next {pileupStep} bp {">"}
+                  </button>
+                  <button onClick={() => movePileupWindow(2)}>
+                    Next {2 * pileupStep} bp {">>"}
+                  </button>
+                  <button onClick={jumpPileupToEnd}>Gene End</button>
+                  <button onClick={jumpPileupToFirstMatch}>
+                    First Match in Gene
+                  </button>
+                  <button onClick={jumpPileupToNextMatch}>
+                    Next Matching Read
+                  </button>
 
-                    <label style={{ marginLeft: "0.5rem" }}>
-                      Window Size:
-                      <select
-                        value={pileupWindowSize}
-                        onChange={(e) => {
-                          const nextSize = Number(e.target.value);
-                          setPileupWindowSize(nextSize);
-                          setPileupWindowStart((current) =>
-                            Math.max(
-                              0,
-                              Math.min(
-                                Math.max(0, geneSequence.length - nextSize),
-                                current,
-                              ),
+                  <label style={{ marginLeft: "0.5rem" }}>
+                    Window Size:
+                    <select
+                      value={pileupWindowSize}
+                      onChange={(e) => {
+                        const nextSize = Number(e.target.value);
+                        setPileupWindowSize(nextSize);
+                        setPileupWindowStart((current) =>
+                          Math.max(
+                            0,
+                            Math.min(
+                              Math.max(0, geneSequence.length - nextSize),
+                              current,
                             ),
-                          );
-                        }}
-                        style={{ marginLeft: "0.25rem" }}
-                      >
-                        {pileupWindowSizes.map((size) => (
-                          <option key={size} value={size}>
-                            {size} bp
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-
-                  <PileupView
-                    geneSequence={geneSequence}
-                    matchingReads={pileupReads}
-                    readLength={pileupReads[0]?.read?.length}
-                    windowStart={pileupWindowStart}
-                    windowSize={pileupWindowSize}
-                  />
-
-                  <div style={Styles.smallMargin}>
-                    Showing all reads with score &gt; {pileupMinScore || 0}.
-                    Windows starts at {pileupWindowStart}.
-                  </div>
+                          ),
+                        );
+                      }}
+                      style={{ marginLeft: "0.25rem" }}
+                    >
+                      {pileupWindowSizes.map((size) => (
+                        <option key={size} value={size}>
+                          {size} bp
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                 </div>
-              )}
-            </div>
-          )}
+
+                <PileupView
+                  geneSequence={geneSequence}
+                  matchingReads={pileupReads}
+                  readLength={pileupReads[0]?.read?.length}
+                  windowStart={pileupWindowStart}
+                  windowSize={pileupWindowSize}
+                />
+
+                <div style={Styles.smallMargin}>
+                  Showing all reads with score &gt; {pileupMinScore || 0}.
+                  Windows starts at {pileupWindowStart}.
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

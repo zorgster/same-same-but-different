@@ -85,8 +85,8 @@ export const APPS = [
       {
         id: "fastq-gene-finder",
         name: "FASTQ Gene Finder",
-        version: "0.1.0",
-        desc: "Find sequenced reads in FASTQ or FASTQ.GZ files that match a gene [Uses Ensembl REST API]",
+        version: "0.2.0",
+        desc: "[Multiworker] Find a gene in FASTQ or FASTQ.GZ files using an array of sparse seeds [Uses Ensembl REST API]",
         status: "experimental",
         component: lazyTool(
           () => import("./fastq-gene-finder/FastqGeneFinder.jsx"),
@@ -95,13 +95,29 @@ export const APPS = [
       {
         id: "fastq-sequence-finder",
         name: "FASTQ Sequence Finder",
-        version: "0.0.1",
-        desc: "Use multiple web workers to search sequenced reads in FASTQ or FASTQ.GZ files",
+        version: "0.1.0",
+        desc: "[Multiworker] Search sequenced reads in FASTQ or FASTQ.GZ files for a DNA sequence.",
         status: "experimental",
         component: lazyTool(
           () => import("./fastq-sequence-finder/FastqSequenceFinder.jsx"),
         ),
       },
+      // {
+      //   id: "fastq-qc-inspector",
+      //   name: "FASTQ QC Inspector",
+      //   version: "0.1.0",
+      //   desc: "Inspect FASTQ or FASTQ.GZ files for quality control metrics and visualizations",
+      //   status: "soon",
+      //   component: null,
+      // },
+      // {
+      //   id: "bam-header-reader",
+      //   name: "BAM Header Reader",
+      //   version: "0.1.0",
+      //   desc: "Read and inspect BAM headers",
+      //   status: "soon",
+      //   component: null,
+      // },
       {
         id: "dna-sequence-visualizer",
         name: "DNA Sequence Visualizer",

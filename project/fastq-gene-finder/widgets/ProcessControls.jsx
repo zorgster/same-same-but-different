@@ -48,7 +48,7 @@ export default function ProcessControls({
   };
 
   return (
-    <div style={{ ...Styles.panel, marginTop: "1rem" }}>
+    <div style={Styles.panel}>
       <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0.5rem" }}>
         <button
           onClick={onProcess}

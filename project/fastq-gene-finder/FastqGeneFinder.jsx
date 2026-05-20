@@ -1,10 +1,14 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { FASTQ_GENE_FINDER_CONFIG } from "./fastq-gene-finder-config.js";
-import FileDropZone from "./widgets/FileDropZone.jsx";
+import DropZone from "../widgets/DropZone.jsx";
 import PileupView from "./widgets/PileupView.jsx";
+import CoverageOverview from "./widgets/CoverageOverview.jsx";
 import ProcessControls from "./widgets/ProcessControls.jsx";
 import ResultsView from "./widgets/ResultsView.jsx";
-import SeedStatsPanel from "./widgets/SeedsStatsPanel.jsx";
+import {
+  MostUniquesPanel,
+  PerSeedSummaryPanel,
+} from "./widgets/SeedsStatsPanel.jsx";
 import SeedVisualization from "./widgets/SeedVisualization.jsx";
 import GeneLookupWidget from "./widgets/GeneLookupWidget.jsx";
 import * as Styles from "./styles/fastq-gene-finder-styles.jsx";
@@ -372,6 +376,7 @@ export default function FastqGeneFinderApp() {
   const [files, setFiles] = useState([]);
   const [geneName, setGeneName] = useState("");
   const [geneSequence, setGeneSequence] = useState("");
+  const [geneInfo, setGeneInfo] = useState(null);
   const [readLength, setReadLength] = useState(null);
   const [seedArrays, setSeedArrays] = useState([]);
   const [matchingReads, setMatchingReads] = useState([]);
@@ -380,7 +385,6 @@ export default function FastqGeneFinderApp() {
   const [keptCount, setKeptCount] = useState(0);
   const [discardedCount, setDiscardedCount] = useState(0);
   const [processingFinished, setProcessingFinished] = useState(false);
-  const [showPileup, setShowPileup] = useState(false);
   const pileupWindowSizes = [100, 125, 150, 175, 200, 225, 250];
   const [pileupWindowSize, setPileupWindowSize] = useState(150);
   const [pileupWindowStart, setPileupWindowStart] = useState(0);
@@ -392,6 +396,7 @@ export default function FastqGeneFinderApp() {
     Math.max(1, Math.floor((navigator.hardwareConcurrency || 4) / 2) - 1),
   );
   const [workerStates, setWorkerStates] = useState([]);
+  const [activeTab, setActiveTab] = useState("seeds");
 
   const pauseRef = useRef(false);
   const abortRef = useRef(false);
@@ -526,8 +531,9 @@ export default function FastqGeneFinderApp() {
   };
 
   const handleGeneSequenceLoaded = useCallback(
-    (sequence) => {
+    (sequence, info) => {
       setGeneSequence(sequence);
+      setGeneInfo(info || null);
       setMatchingReads([]);
 
       if (readLength) {
@@ -551,6 +557,7 @@ export default function FastqGeneFinderApp() {
 
   const handleGeneLookupFailed = useCallback(() => {
     setGeneSequence("");
+    setGeneInfo(null);
     setSeedArrays([]);
     setMatchingReads([]);
     setStatus(files.length ? "awaiting-gene" : "idle");
@@ -862,22 +869,83 @@ export default function FastqGeneFinderApp() {
   };
 
   /* ---------------- Render ---------------- */
+  const TABS = [
+    { key: "seeds", label: "Seeds" },
+    {
+      key: "reads",
+      label: `Matched Reads${matchingReads.length ? ` (${matchingReads.length})` : ""}`,
+    },
+    { key: "qc", label: "QC" },
+    { key: "pileup", label: "Pileup" },
+  ];
+
+  const tabBarStyle = {
+    display: "flex",
+    borderBottom: "2px solid #444",
+    marginTop: "1rem",
+  };
+
+  const tabBtnStyle = (active) => ({
+    padding: "0.4rem 1rem",
+    border: "none",
+    borderBottom: active ? "3px solid #444" : "3px solid transparent",
+    background: active ? "#f0f0f0" : "transparent",
+    fontFamily: "monospace",
+    fontSize: "13px",
+    fontWeight: active ? 700 : 400,
+    cursor: "pointer",
+    marginBottom: "-2px",
+  });
+
   return (
     <div style={{ ...Styles.container, paddingBottom: "50vh" }}>
       <h2>Sparse Seed‑n‑Vote Gene Finder</h2>
-      <h3>
-        A tool for finding gene matches in FASTQ files using random sparse seed
-        arrays
-      </h3>
-      <MoreInfoWidget />
-      <div style={Styles.twoColumn}>
-        <div style={Styles.leftColumn}>
-          <FileDropZone
-            onFilesSelected={handleFilesSelected}
-            selectedFile={files[0]}
-            readLength={readLength}
-          />
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
+        <h3 style={{ margin: 0 }}>
+          A tool for finding gene matches in FASTQ files using random sparse
+          seed arrays
+        </h3>
+        <MoreInfoWidget />
+      </div>
 
+      {/* Top row — three panels side by side */}
+      <div
+        style={{
+          display: "flex",
+          gap: "1rem",
+          marginTop: "1rem",
+          alignItems: "flex-start",
+        }}
+      >
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <DropZone
+            onFilesSelected={handleFilesSelected}
+            accept={{
+              "text/plain": [".fastq", ".fq"],
+              "application/gzip": [".fastq.gz", ".fq.gz"],
+              "application/x-gzip": [".fastq.gz", ".fq.gz"],
+              "application/octet-stream": [
+                ".fastq",
+                ".fq",
+                ".fastq.gz",
+                ".fq.gz",
+              ],
+            }}
+            label="Drop (single-end or R1 of paired-end) .fastq/.gz or click to select"
+            multiple={true}
+            selectedFiles={files}
+            fileInfo={
+              readLength ? [{ label: "Read Length", value: readLength }] : []
+            }
+          />
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <GeneLookupWidget
             geneName={geneName}
             setGeneName={setGeneName}
@@ -885,7 +953,8 @@ export default function FastqGeneFinderApp() {
             onLookupError={handleGeneLookupFailed}
             geneSequence={geneSequence}
           />
-
+        </div>
+        <div style={{ flex: 1, minWidth: 0 }}>
           <ProcessControls
             status={status}
             onProcess={handleProcess}
@@ -902,99 +971,141 @@ export default function FastqGeneFinderApp() {
             workerStates={workerStates}
           />
         </div>
+      </div>
 
-        <div style={Styles.rightColumn}>
+      {/* Tab bar */}
+      <div style={tabBarStyle}>
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            style={tabBtnStyle(activeTab === t.key)}
+            onClick={() => setActiveTab(t.key)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Tab: Seeds */}
+      {activeTab === "seeds" && (
+        <div style={{ marginTop: "1rem" }}>
           <SeedVisualization seedArrays={seedArrays} readLength={readLength} />
-          {seedStats?.perSeedStats && (
-            <SeedStatsPanel seedStats={seedStats} seedArrays={seedArrays} />
+          <div
+            style={{
+              display: "flex",
+              gap: "1rem",
+              marginTop: "1rem",
+              alignItems: "flex-start",
+            }}
+          >
+            <PerSeedSummaryPanel seedStats={seedStats} />
+            <MostUniquesPanel seedStats={seedStats} />
+          </div>
+        </div>
+      )}
+
+      {/* Tab: Matched Reads */}
+      {activeTab === "reads" && (
+        <div style={{ marginTop: "1rem" }}>
+          <ResultsView matchingReads={matchingReads} seedArrays={seedArrays} />
+        </div>
+      )}
+
+      {/* Tab: QC (reserved) */}
+      {activeTab === "qc" && (
+        <div
+          style={{ marginTop: "2rem", color: "#888", fontFamily: "monospace" }}
+        >
+          QC — coming soon
+        </div>
+      )}
+
+      {/* Tab: Pileup */}
+      {activeTab === "pileup" && (
+        <div style={{ marginTop: "1rem" }}>
+          {!processingFinished || matchingReads.length === 0 ? (
+            <div style={{ color: "#888", fontFamily: "monospace" }}>
+              No matches yet — run processing first.
+            </div>
+          ) : (
+            <>
+              <CoverageOverview
+                geneSequence={geneSequence}
+                matchingReads={pileupReads}
+                readLength={readLength || 100}
+                windowStart={pileupWindowStart}
+                windowSize={pileupWindowSize}
+                onWindowJump={setPileupWindowStart}
+                geneInfo={geneInfo}
+              />
+              <div
+                style={{
+                  display: "flex",
+                  gap: "0.5rem",
+                  flexWrap: "wrap",
+                  marginBottom: "0.5rem",
+                }}
+              >
+                <button onClick={jumpPileupToStart}>Gene Start</button>
+                <button onClick={() => movePileupWindow(-2)}>
+                  {"<<"} Prev {2 * pileupStep} bp
+                </button>
+                <button onClick={() => movePileupWindow(-1)}>
+                  {"<"} Prev {pileupStep} bp
+                </button>
+                <button onClick={() => movePileupWindow(1)}>
+                  Next {pileupStep} bp {">"}
+                </button>
+                <button onClick={() => movePileupWindow(2)}>
+                  Next {2 * pileupStep} bp {">>"}
+                </button>
+                <button onClick={jumpPileupToEnd}>Gene End</button>
+                <button onClick={jumpPileupToFirstMatch}>First Match</button>
+                <button onClick={jumpPileupToNextMatch}>Next Match</button>
+                <label style={{ marginLeft: "0.5rem" }}>
+                  Window:
+                  <select
+                    value={pileupWindowSize}
+                    onChange={(e) => {
+                      const nextSize = Number(e.target.value);
+                      setPileupWindowSize(nextSize);
+                      setPileupWindowStart((current) =>
+                        Math.max(
+                          0,
+                          Math.min(
+                            Math.max(0, geneSequence.length - nextSize),
+                            current,
+                          ),
+                        ),
+                      );
+                    }}
+                    style={{ marginLeft: "0.25rem" }}
+                  >
+                    {pileupWindowSizes.map((size) => (
+                      <option key={size} value={size}>
+                        {size} bp
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div style={Styles.smallMargin}>
+                Score threshold: {pileupMinScore || 0} — showing{" "}
+                {pileupReads.length} reads. Window starts at {pileupWindowStart}
+                .
+              </div>
+              <PileupView
+                geneSequence={geneSequence}
+                matchingReads={pileupReads}
+                readLength={pileupReads[0]?.read?.length}
+                windowStart={pileupWindowStart}
+                windowSize={pileupWindowSize}
+                geneInfo={geneInfo}
+              />
+            </>
           )}
         </div>
-      </div>
-      <div style={{ marginTop: "1rem" }}>
-        <ResultsView matchingReads={matchingReads} seedArrays={seedArrays} />
-
-        {processingFinished && matchingReads.length > 0 && (
-          <div style={{ marginTop: "1rem" }}>
-            <button onClick={() => setShowPileup((s) => !showPileup)}>
-              {showPileup ? "Hide Pileup" : "Show Pileup"}
-            </button>
-
-            {showPileup && (
-              <div style={{ marginTop: "0.5rem" }}>
-                <h3>Pileup for reads with score &gt; {pileupMinScore || 0}</h3>
-                <div
-                  style={{
-                    display: "flex",
-                    gap: "0.5rem",
-                    marginBottom: "0.5rem",
-                  }}
-                >
-                  <button onClick={jumpPileupToStart}>Gene Start</button>
-                  <button onClick={() => movePileupWindow(-2)}>
-                    {"<<"} Prev {2 * pileupStep} bp
-                  </button>
-                  <button onClick={() => movePileupWindow(-1)}>
-                    {"<"} Prev {pileupStep} bp
-                  </button>
-                  <button onClick={() => movePileupWindow(1)}>
-                    Next {pileupStep} bp {">"}
-                  </button>
-                  <button onClick={() => movePileupWindow(2)}>
-                    Next {2 * pileupStep} bp {">>"}
-                  </button>
-                  <button onClick={jumpPileupToEnd}>Gene End</button>
-                  <button onClick={jumpPileupToFirstMatch}>
-                    First Match in Gene
-                  </button>
-                  <button onClick={jumpPileupToNextMatch}>
-                    Next Matching Read
-                  </button>
-
-                  <label style={{ marginLeft: "0.5rem" }}>
-                    Window Size:
-                    <select
-                      value={pileupWindowSize}
-                      onChange={(e) => {
-                        const nextSize = Number(e.target.value);
-                        setPileupWindowSize(nextSize);
-                        setPileupWindowStart((current) =>
-                          Math.max(
-                            0,
-                            Math.min(
-                              Math.max(0, geneSequence.length - nextSize),
-                              current,
-                            ),
-                          ),
-                        );
-                      }}
-                      style={{ marginLeft: "0.25rem" }}
-                    >
-                      {pileupWindowSizes.map((size) => (
-                        <option key={size} value={size}>
-                          {size} bp
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-
-                <PileupView
-                  geneSequence={geneSequence}
-                  matchingReads={pileupReads}
-                  readLength={pileupReads[0]?.read?.length}
-                  windowStart={pileupWindowStart}
-                  windowSize={pileupWindowSize}
-                />
-
-                <div style={Styles.smallMargin}>
-                  Showing all reads with score &gt; {pileupMinScore || 0}.
-                  Windows starts at {pileupWindowStart}.
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
+      )}
     </div>
   );
 }

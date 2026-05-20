@@ -21,6 +21,12 @@ async function fetchGeneSequence(geneName) {
   return { seq: seqJson.seq, lookupJson };
 }
 
+const secondaryBtn = {
+  fontSize: "11px",
+  padding: "2px 6px",
+  cursor: "pointer",
+};
+
 export default function GeneLookupWidget({
   geneName,
   setGeneName,
@@ -51,7 +57,14 @@ export default function GeneLookupWidget({
         strand: lookupJson.strand,
         assembly: lookupJson.assembly_name,
       });
-      onSequenceLoaded(seq);
+      onSequenceLoaded(seq, {
+        id: lookupJson.id,
+        seqRegionName: lookupJson.seq_region_name,
+        start: lookupJson.start,
+        end: lookupJson.end,
+        strand: lookupJson.strand,
+        assembly: lookupJson.assembly_name,
+      });
     } catch (e) {
       setError(String(e));
       setLookupInfo(null);
@@ -77,29 +90,30 @@ export default function GeneLookupWidget({
   };
 
   return (
-    <div style={{ ...Styles.panel, marginTop: "1rem" }}>
-      <input
-        value={geneName}
-        onChange={(e) => setGeneName(e.target.value)}
-        placeholder="Gene symbol (e.g. BRCA1)"
-      />
-      <button onClick={handleFetch} disabled={!geneName || loading}>
-        {loading ? "Fetching…" : "Lookup"}
-      </button>
-      <button
-        onClick={handleTestGene}
-        disabled={loading}
-        style={{ marginLeft: "0.5rem" }}
-      >
-        Use Test Gene
-      </button>
-      <button
-        onClick={handleDownloadTestFastq}
-        disabled={loading}
-        style={{ marginLeft: "0.5rem" }}
-      >
-        Download Test FASTQ
-      </button>
+    <div style={Styles.panel}>
+      <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-start" }}>
+        <div style={{ display: "flex", gap: "0.25rem", alignItems: "center" }}>
+          <input
+            value={geneName}
+            onChange={(e) => setGeneName(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && geneName && !loading && handleFetch()}
+            placeholder="e.g. BRCA1"
+            style={{ width: "9ch", fontFamily: "monospace" }}
+          />
+          <button onClick={handleFetch} disabled={!geneName || loading}>
+            {loading ? "Fetching…" : "Lookup"}
+          </button>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "3px", marginLeft: "auto" }}>
+          <button onClick={handleTestGene} disabled={loading} style={secondaryBtn}>
+            Use Test Gene
+          </button>
+          <button onClick={handleDownloadTestFastq} disabled={loading} style={secondaryBtn}>
+            Download Test FASTQ
+          </button>
+        </div>
+      </div>
+
       {lookupInfo && (
         <div
           style={{
@@ -110,39 +124,24 @@ export default function GeneLookupWidget({
             lineHeight: 1.4,
           }}
         >
-          <div>
-            <strong>{lookupInfo.displayName}</strong>
-          </div>
+          <div><strong>{lookupInfo.displayName}</strong></div>
           <div>
             <strong>Desc:</strong>{" "}
             {lookupInfo.description || "No description returned by Ensembl."}
           </div>
-          <div>
-            <strong>Source:</strong> {lookupInfo.source}
-          </div>
-          <div>
-            <strong>ID:</strong> {lookupInfo.id} (Version: {lookupInfo.version})
-          </div>
-          <div>
-            <strong>Type:</strong> {lookupInfo.biotype}
-          </div>
+          <div><strong>Source:</strong> {lookupInfo.source}</div>
+          <div><strong>ID:</strong> {lookupInfo.id} (Version: {lookupInfo.version})</div>
+          <div><strong>Type:</strong> {lookupInfo.biotype}</div>
           <div>
             <strong>Region:</strong> {lookupInfo.seqRegionName}:
             {lookupInfo.start}-{lookupInfo.end} ({lookupInfo.strand})
           </div>
-          <div>
-            <strong>Assembly:</strong> {lookupInfo.assembly}
-          </div>
-          <div>
-            <strong>Canonical Transcript:</strong>{" "}
-            {lookupInfo.canonical || "N/A"}
-          </div>
-          <div>
-            <strong>Gene Length:</strong> {geneSequence?.length || "-"}
-          </div>
+          <div><strong>Assembly:</strong> {lookupInfo.assembly}</div>
+          <div><strong>Canonical Transcript:</strong> {lookupInfo.canonical || "N/A"}</div>
+          <div><strong>Gene Length:</strong> {geneSequence?.length || "-"}</div>
         </div>
       )}
-      {error && <div style={{ color: "red" }}>{error}</div>}
+      {error && <div style={{ color: "red", marginTop: "0.5rem" }}>{error}</div>}
     </div>
   );
 }

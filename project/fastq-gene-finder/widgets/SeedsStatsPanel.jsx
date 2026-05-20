@@ -1,45 +1,24 @@
-export default function SeedStatsPanel({ seedStats = {}, seedArrays = [] }) {
-  const perSeed = Array.isArray(seedStats.perSeedStats)
-    ? seedStats.perSeedStats
-    : [];
+const statsTooltip =
+  "Distinct samples: the number of unique sampled seed keys seen for this seed.\n" +
+  "Singletons: keys that only occur once in the gene sequence.\n" +
+  "Total alignments: total gene window hits across all sampled keys, counting repeats.";
+
+export function MostUniquesPanel({ seedStats = {} }) {
   const topUnique = Array.isArray(seedStats.topUniqueSamples)
     ? seedStats.topUniqueSamples
     : [];
 
-  const statsTooltip =
-    "Distinct samples: the number of unique sampled seed keys seen for this seed.\n" +
-    "Singletons: keys that only occur once in the gene sequence.\n" +
-    "Total alignments: total gene window hits across all sampled keys, counting repeats.";
-
-  if (!perSeed.length && !topUnique.length) return null;
-
   return (
-    <div
-      style={{
-        marginTop: "1rem",
-        padding: "0.5rem",
-        border: "1px solid #ccc",
-        fontSize: "12px",
-      }}
-    >
+    <div style={{ padding: "0.5rem", border: "1px solid #ccc", fontSize: "12px", flex: 1, minWidth: 0 }}>
       <h4 style={{ margin: "0 0 6px 0" }}>
         Most Unique Sampled Keys (top {topUnique.length})
       </h4>
-
       {topUnique.length === 0 ? (
-        <div>No sampled keys available.</div>
+        <div style={{ color: "#888" }}>No data yet.</div>
       ) : (
-        <div
-          style={{
-            fontFamily: '"Courier New", Courier, monospace',
-            marginBottom: "6px",
-          }}
-        >
+        <div style={{ fontFamily: '"Courier New", Courier, monospace' }}>
           {topUnique.map((s, i) => (
-            <div
-              key={`${s.seedId}-${s.sampleKey}-${i}`}
-              style={{ marginBottom: "4px" }}
-            >
+            <div key={`${s.seedId}-${s.sampleKey}-${i}`} style={{ marginBottom: "4px" }}>
               <strong>Seed #{s.seedId}</strong> ({s.seedLabel}) — occurrences:{" "}
               <strong>{s.count}</strong>
               <div
@@ -57,14 +36,19 @@ export default function SeedStatsPanel({ seedStats = {}, seedArrays = [] }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
 
+export function PerSeedSummaryPanel({ seedStats = {} }) {
+  const perSeed = Array.isArray(seedStats.perSeedStats)
+    ? seedStats.perSeedStats
+    : [];
+
+  return (
+    <div style={{ padding: "0.5rem", border: "1px solid #ccc", fontSize: "12px", flex: 1, minWidth: 0 }}>
       <h4
-        style={{
-          margin: "8px 0 6px 0",
-          display: "flex",
-          alignItems: "center",
-          gap: "0.4rem",
-        }}
+        style={{ margin: "0 0 6px 0", display: "flex", alignItems: "center", gap: "0.4rem" }}
       >
         <span>Per-seed summary</span>
         <span
@@ -87,16 +71,19 @@ export default function SeedStatsPanel({ seedStats = {}, seedArrays = [] }) {
           ?
         </span>
       </h4>
-
-      <div style={{ fontSize: "11px" }}>
-        {perSeed.map((ps) => (
-          <div key={ps.seedId} style={{ marginBottom: "4px" }}>
-            <strong>Seed #{ps.seedId}</strong> ({ps.seedLabel}) — distinct
-            samples: {ps.distinctSamples}, singletons: {ps.singletonCount},
-            total alignments: {ps.totalAlignments}
-          </div>
-        ))}
-      </div>
+      {perSeed.length === 0 ? (
+        <div style={{ color: "#888" }}>No data yet.</div>
+      ) : (
+        <div style={{ fontSize: "11px" }}>
+          {perSeed.map((ps) => (
+            <div key={ps.seedId} style={{ marginBottom: "4px" }}>
+              <strong>Seed #{ps.seedId}</strong> ({ps.seedLabel}) — distinct
+              samples: {ps.distinctSamples}, singletons: {ps.singletonCount},
+              total alignments: {ps.totalAlignments}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

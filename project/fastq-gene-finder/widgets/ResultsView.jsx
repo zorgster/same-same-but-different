@@ -56,6 +56,7 @@ export default memo(function ResultsView({ matchingReads, seedArrays = [] }) {
         "position",
         "orientation",
         "score",
+        "source",
         "seedIds",
         "read",
       ].join(","),
@@ -67,6 +68,7 @@ export default memo(function ResultsView({ matchingReads, seedArrays = [] }) {
           m.position ?? m.positions?.[0],
           m.orientation ?? "",
           m.score ?? m.scores?.[0],
+          m.source ?? "genomic",
           (m.seedIds || []).join("|"),
           `"${m.read || ""}"`,
         ].join(","),
@@ -146,6 +148,9 @@ export default memo(function ResultsView({ matchingReads, seedArrays = [] }) {
             {m.position ?? m.positions?.[0]} score=
             {m.score ?? m.scores?.[0]} orientation=
             {m.orientation ?? ""}
+            {m.source === "spliced" && (
+              <span style={{ color: "#0a9", marginLeft: "0.3rem" }}>[spliced]</span>
+            )}
             <SeedMatchDots
               seedIds={m.seedIds || []}
               seedArrays={seedArrays}

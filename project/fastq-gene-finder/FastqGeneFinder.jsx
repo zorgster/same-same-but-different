@@ -251,6 +251,29 @@ function decodeNumericKey(key, len) {
   return s;
 }
 
+function extractExonIntervals(maskedSeq) {
+  const intervals = [];
+  let start = -1;
+  for (let i = 0; i <= maskedSeq.length; i++) {
+    const c = maskedSeq[i];
+    const isExon = c >= "A" && c <= "Z";
+    if (start === -1 && isExon)       start = i;
+    else if (start !== -1 && !isExon) { intervals.push({ gStart: start, gEnd: i }); start = -1; }
+  }
+  return intervals;
+}
+
+function buildSplicedIndex(intervals, geneSequence, readLength, seedArrays) {
+  let seq = "";
+  const exonMap = [];
+  for (const { gStart, gEnd } of intervals) {
+    exonMap.push({ txStart: seq.length, txEnd: seq.length + (gEnd - gStart), gStart });
+    seq += geneSequence.slice(gStart, gEnd);
+  }
+  if (seq.length < readLength) return null;
+  return { txId: "spliced", indices: buildSeedIndices(seq, readLength, seedArrays), exonMap };
+}
+
 function buildSeedIndices(geneSequence, readLength, seedArrays) {
   const maxStart = Math.max(0, geneSequence.length - readLength);
   return seedArrays.map((seed) => {
@@ -377,6 +400,8 @@ export default function FastqGeneFinderApp() {
   const [geneName, setGeneName] = useState("");
   const [geneSequence, setGeneSequence] = useState("");
   const [geneInfo, setGeneInfo] = useState(null);
+  const [maskedGeneSeq, setMaskedGeneSeq] = useState(null);
+  const txDataRef = useRef([]);
   const [readLength, setReadLength] = useState(null);
   const [seedArrays, setSeedArrays] = useState([]);
   const [matchingReads, setMatchingReads] = useState([]);
@@ -388,6 +413,8 @@ export default function FastqGeneFinderApp() {
   const pileupWindowSizes = [100, 125, 150, 175, 200, 225, 250];
   const [pileupWindowSize, setPileupWindowSize] = useState(150);
   const [pileupWindowStart, setPileupWindowStart] = useState(0);
+  const [matchThresholdPct, setMatchThresholdPct] = useState(50);
+  const [pileupThresholdPct, setPileupThresholdPct] = useState(70);
   const [seedStats, setSeedStats] = useState({
     perSeedStats: [],
     topUniqueSamples: [],
@@ -464,7 +491,7 @@ export default function FastqGeneFinderApp() {
   const pileupStep = 25;
   const pileupMinScore = Math.max(
     1,
-    Math.ceil((seedArrays?.length || 1) * 0.7),
+    Math.ceil((seedArrays?.length || 1) * pileupThresholdPct / 100),
   );
   const pileupReads = processingFinished
     ? matchingReads.filter((read) => (read.score ?? 0) >= pileupMinScore)
@@ -531,10 +558,12 @@ export default function FastqGeneFinderApp() {
   };
 
   const handleGeneSequenceLoaded = useCallback(
-    (sequence, info) => {
+    (sequence, info, maskedSeq) => {
       setGeneSequence(sequence);
       setGeneInfo(info || null);
+      setMaskedGeneSeq(maskedSeq ?? null);
       setMatchingReads([]);
+      setActiveTab("seeds");
 
       if (readLength) {
         const seeds = generateSeedArrays(readLength);
@@ -558,10 +587,23 @@ export default function FastqGeneFinderApp() {
   const handleGeneLookupFailed = useCallback(() => {
     setGeneSequence("");
     setGeneInfo(null);
+    setMaskedGeneSeq(null);
     setSeedArrays([]);
     setMatchingReads([]);
+    txDataRef.current = [];
     setStatus(files.length ? "awaiting-gene" : "idle");
   }, [files.length]);
+
+  // Rebuild spliced (exon-union) index whenever masked sequence, gene, or seeds change
+  useEffect(() => {
+    if (maskedGeneSeq && geneSequence && seedArrays?.length) {
+      const intervals = extractExonIntervals(maskedGeneSeq);
+      const result = buildSplicedIndex(intervals, geneSequence, readLength || 100, seedArrays);
+      txDataRef.current = result ? [result] : [];
+    } else {
+      txDataRef.current = [];
+    }
+  }, [maskedGeneSeq, geneSequence, seedArrays, readLength]);
 
   /* ---------------- File selection ---------------- */
   const handleFilesSelected = useCallback((selected) => {
@@ -624,7 +666,7 @@ export default function FastqGeneFinderApp() {
     const seedIndices = indicesRef.current;
     const minSeedMatches = Math.max(
       1,
-      Math.ceil((seedArrays?.length || 1) * 0.5),
+      Math.ceil((seedArrays?.length || 1) * matchThresholdPct / 100),
     );
     const actualWorkerCount = Math.max(1, workerCount);
 
@@ -800,7 +842,7 @@ export default function FastqGeneFinderApp() {
     workers.forEach((w) =>
       w.postMessage({
         type: "init",
-        payload: { seedArrays, seedIndices, minSeedMatches },
+        payload: { seedArrays, seedIndices, minSeedMatches, txData: txDataRef.current },
       }),
     );
     await allReadyPromise;
@@ -969,6 +1011,8 @@ export default function FastqGeneFinderApp() {
             workerCount={workerCount}
             onWorkerCountChange={setWorkerCount}
             workerStates={workerStates}
+            matchThresholdPct={matchThresholdPct}
+            onMatchThresholdChange={setMatchThresholdPct}
           />
         </div>
       </div>
@@ -1089,10 +1133,24 @@ export default function FastqGeneFinderApp() {
                   </select>
                 </label>
               </div>
-              <div style={Styles.smallMargin}>
-                Score threshold: {pileupMinScore || 0} — showing{" "}
-                {pileupReads.length} reads. Window starts at {pileupWindowStart}
-                .
+              <div style={{ ...Styles.smallMargin, display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
+                <label style={{ fontSize: "12px", display: "flex", alignItems: "center", gap: "0.25rem" }}>
+                  Pileup %:
+                  <select
+                    value={pileupThresholdPct}
+                    onChange={(e) => setPileupThresholdPct(Number(e.target.value))}
+                    style={{ fontSize: "11px" }}
+                  >
+                    {[30, 40, 50, 60, 70, 80, 90, 100].map((v) => (
+                      <option key={v} value={v}>
+                        {v}% ({Math.max(1, Math.ceil((seedArrays?.length || 1) * v / 100))} seeds)
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <span style={{ fontSize: "12px" }}>
+                  — showing {pileupReads.length} reads. Window starts at {pileupWindowStart}.
+                </span>
               </div>
               <PileupView
                 geneSequence={geneSequence}

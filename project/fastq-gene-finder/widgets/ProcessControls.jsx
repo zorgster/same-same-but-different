@@ -37,6 +37,8 @@ export default function ProcessControls({
   workerCount,
   onWorkerCountChange,
   workerStates,
+  matchThresholdPct,
+  onMatchThresholdChange,
 }) {
   const isAborted = status === "aborted";
   const isActive = status === "processing" || status === "paused";
@@ -73,6 +75,21 @@ export default function ProcessControls({
               style={{ width: "2.5rem" }}
               title="Parallel worker threads (1–8)"
             />
+          </label>
+        )}
+        {!isActive && onMatchThresholdChange && (
+          <label style={{ fontSize: "12px", display: "flex", alignItems: "center", gap: "0.25rem" }}>
+            Match %:
+            <select
+              value={matchThresholdPct}
+              onChange={(e) => onMatchThresholdChange(Number(e.target.value))}
+              style={{ fontSize: "12px" }}
+              title="Minimum fraction of seeds that must vote for a read to be kept"
+            >
+              {[30, 40, 50, 60, 70, 80, 90, 100].map((v) => (
+                <option key={v} value={v}>{v}</option>
+              ))}
+            </select>
           </label>
         )}
 

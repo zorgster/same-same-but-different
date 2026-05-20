@@ -1,6 +1,31 @@
 let seedArrays, seedIndices, minSeedMatches;
+let txData = [];
 let positionSeedMap, RC_BYTES;
 let isAborted = false;
+
+function txPosToGenePos(txPos, exonMap) {
+  for (const seg of exonMap) {
+    if (txPos >= seg.txStart && txPos < seg.txEnd)
+      return seg.gStart + (txPos - seg.txStart);
+  }
+  return null;
+}
+
+function computeJunctions(txPos, readLen, exonMap) {
+  const segs = [];
+  for (const seg of exonMap) {
+    const oStart = Math.max(txPos, seg.txStart);
+    const oEnd   = Math.min(txPos + readLen, seg.txEnd);
+    if (oStart < oEnd) {
+      segs.push({
+        readStart: oStart - txPos,
+        readEnd:   oEnd   - txPos,
+        gStart:    seg.gStart + (oStart - seg.txStart),
+      });
+    }
+  }
+  return segs;
+}
 
 // BYTE_TO_CHAR still needed for building the display seqStr on match
 const BYTE_TO_CHAR = new Array(256);
@@ -34,6 +59,7 @@ const revSeedsMap = new Map();
 self.onmessage = ({ data: { type, payload } }) => {
   if (type === "init") {
     ({ seedArrays, seedIndices, minSeedMatches } = payload);
+    txData = payload.txData ?? [];
     isAborted = false;
 
     // Build inverted position → [seedId] map (runs once per worker)
@@ -79,18 +105,18 @@ self.onmessage = ({ data: { type, payload } }) => {
       readKeysFwd.fill(0);
       readKeysRev.fill(0);
 
-      // Forward pass: accumulate 2-bit numeric key for each seed (key = key*4 + base_bits)
+      // Single pass: forward key uses seqBytes[i]; RC key uses complement of seqBytes[readLen-1-i]
+      // Both index the same positionSeedMap entry at position i, so one map lookup serves both.
       for (let i = 0; i < readLen; i++) {
-        const bits = BASE_BITS[seqBytes[i]];
-        const fwdIds = positionSeedMap.get(i);
-        if (fwdIds) for (const s of fwdIds) readKeysFwd[s] = readKeysFwd[s] * 4 + bits;
-      }
-
-      // Reverse pass: accumulate RC numeric key (complement bits, ascending RC-position order)
-      for (let i = readLen - 1; i >= 0; i--) {
-        const rcBits = RC_BASE_BITS[seqBytes[i]];
-        const rcIds = positionSeedMap.get(readLen - 1 - i);
-        if (rcIds) for (const s of rcIds) readKeysRev[s] = readKeysRev[s] * 4 + rcBits;
+        const ids = positionSeedMap.get(i);
+        if (ids) {
+          const fwdBits = BASE_BITS[seqBytes[i]];
+          const rcBits  = RC_BASE_BITS[seqBytes[readLen - 1 - i]];
+          for (const s of ids) {
+            readKeysFwd[s] = readKeysFwd[s] * 4 + fwdBits;
+            readKeysRev[s] = readKeysRev[s] * 4 + rcBits;
+          }
+        }
       }
 
       // Lookup all forward keys (reuse Map, clear between reads)
@@ -115,46 +141,100 @@ self.onmessage = ({ data: { type, payload } }) => {
         }
       }
 
-      // Convert seq to string only when there are matches to report
+      // Lazy string builds — only allocate when a match is confirmed
+      let seqStr = null;
+      let rcStr  = null;
+      let hasMatch = false;
+
+      // Gene-sequence forward matches
       for (const [pos, score] of fwdScores) {
         if (score >= minSeedMatches) {
+          if (!seqStr) seqStr = String.fromCharCode(...seqBytes);
           matches.push({
-            read: String.fromCharCode(...seqBytes),
-            orientation: "forward",
-            readNumber: index + 1,
-            fastqHeaderLine: index * 4 + 1,
-            fastqSequenceLine: index * 4 + 2,
-            position: pos,
-            positions: [pos],
-            score,
-            scores: [score],
-            index,
-            seedIds: fwdSeedsMap.get(pos) || [],
+            read: seqStr, orientation: "forward",
+            readNumber: index + 1, fastqHeaderLine: index * 4 + 1, fastqSequenceLine: index * 4 + 2,
+            position: pos, positions: [pos], score, scores: [score],
+            index, seedIds: fwdSeedsMap.get(pos) || [],
           });
+          hasMatch = true;
         }
       }
 
-      if (revScores.size > 0) {
-        // Build RC string only when there are reverse matches to report
-        const rcArr = new Array(readLen);
-        for (let i = 0; i < readLen; i++) rcArr[i] = String.fromCharCode(RC_BYTES[seqBytes[readLen - 1 - i]]);
-        const rcStr = rcArr.join("");
+      // Gene-sequence reverse matches
+      for (const [pos, score] of revScores) {
+        if (score >= minSeedMatches) {
+          if (!rcStr) {
+            const rcArr = new Array(readLen);
+            for (let i = 0; i < readLen; i++) rcArr[i] = String.fromCharCode(RC_BYTES[seqBytes[readLen - 1 - i]]);
+            rcStr = rcArr.join("");
+          }
+          matches.push({
+            read: rcStr, orientation: "reverse",
+            readNumber: index + 1, fastqHeaderLine: index * 4 + 1, fastqSequenceLine: index * 4 + 2,
+            position: pos, positions: [pos], score, scores: [score],
+            index, seedIds: revSeedsMap.get(pos) || [],
+          });
+          hasMatch = true;
+        }
+      }
 
-        for (const [pos, score] of revScores) {
-          if (score >= minSeedMatches) {
-            matches.push({
-              read: rcStr,
-              orientation: "reverse",
-              readNumber: index + 1,
-              fastqHeaderLine: index * 4 + 1,
-              fastqSequenceLine: index * 4 + 2,
-              position: pos,
-              positions: [pos],
-              score,
-              scores: [score],
-              index,
-              seedIds: revSeedsMap.get(pos) || [],
-            });
+      // Spliced (exon-union) fallback — only for reads that had no gene match
+      if (!hasMatch && txData.length) {
+        outer: for (const { txId, indices, exonMap } of txData) {
+          fwdScores.clear(); fwdSeedsMap.clear();
+          for (let s = 0; s < numSeeds; s++) {
+            const hits = indices[s].get(readKeysFwd[s]);
+            if (hits) for (const pos of hits) {
+              fwdScores.set(pos, (fwdScores.get(pos) || 0) + 1);
+              const sl = fwdSeedsMap.get(pos);
+              if (sl) sl.push(seedArrays[s].id); else fwdSeedsMap.set(pos, [seedArrays[s].id]);
+            }
+          }
+          for (const [txPos, score] of fwdScores) {
+            if (score >= minSeedMatches) {
+              const gPos = txPosToGenePos(txPos, exonMap);
+              if (gPos != null) {
+                if (!seqStr) seqStr = String.fromCharCode(...seqBytes);
+                matches.push({
+                  read: seqStr, orientation: "forward",
+                  readNumber: index + 1, fastqHeaderLine: index * 4 + 1, fastqSequenceLine: index * 4 + 2,
+                  position: gPos, positions: [gPos], score, scores: [score],
+                  index, seedIds: fwdSeedsMap.get(txPos) || [], source: txId,
+                  junctions: computeJunctions(txPos, readLen, exonMap),
+                });
+                hasMatch = true; break outer;
+              }
+            }
+          }
+
+          revScores.clear(); revSeedsMap.clear();
+          for (let s = 0; s < numSeeds; s++) {
+            const hits = indices[s].get(readKeysRev[s]);
+            if (hits) for (const pos of hits) {
+              revScores.set(pos, (revScores.get(pos) || 0) + 1);
+              const sl = revSeedsMap.get(pos);
+              if (sl) sl.push(seedArrays[s].id); else revSeedsMap.set(pos, [seedArrays[s].id]);
+            }
+          }
+          for (const [txPos, score] of revScores) {
+            if (score >= minSeedMatches) {
+              const gPos = txPosToGenePos(txPos, exonMap);
+              if (gPos != null) {
+                if (!rcStr) {
+                  const rcArr = new Array(readLen);
+                  for (let i = 0; i < readLen; i++) rcArr[i] = String.fromCharCode(RC_BYTES[seqBytes[readLen - 1 - i]]);
+                  rcStr = rcArr.join("");
+                }
+                matches.push({
+                  read: rcStr, orientation: "reverse",
+                  readNumber: index + 1, fastqHeaderLine: index * 4 + 1, fastqSequenceLine: index * 4 + 2,
+                  position: gPos, positions: [gPos], score, scores: [score],
+                  index, seedIds: revSeedsMap.get(txPos) || [], source: txId,
+                  junctions: computeJunctions(txPos, readLen, exonMap),
+                });
+                hasMatch = true; break outer;
+              }
+            }
           }
         }
       }

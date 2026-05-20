@@ -218,7 +218,7 @@ export default function CoverageOverview({
     ctx.lineTo(W, exonMidY);
     ctx.stroke();
 
-    ctx.fillStyle = COLORS.accent;
+    ctx.fillStyle = COLORS.warning;
     let inExon = false, exonStart = 0;
     for (let b = 0; b <= W; b++) {
       const covered = b < W && bins[b] >= COV_THRESHOLD;

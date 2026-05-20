@@ -13,12 +13,12 @@ async function fetchGeneSequence(geneName) {
   const lookupJson = await lookup.json();
 
   const seqRes = await fetch(
-    `https://rest.ensembl.org/sequence/id/${lookupJson.id}?content-type=application/json&type=genomic`,
+    `https://rest.ensembl.org/sequence/id/${lookupJson.id}?content-type=application/json&type=genomic&mask_feature=1`,
   );
   if (!seqRes.ok) throw new Error("Sequence fetch failed");
   const seqJson = await seqRes.json();
 
-  return { seq: seqJson.seq, lookupJson };
+  return { seq: seqJson.seq.toUpperCase(), maskedSeq: seqJson.seq, lookupJson };
 }
 
 const secondaryBtn = {
@@ -42,7 +42,7 @@ export default function GeneLookupWidget({
     setLoading(true);
     setError("");
     try {
-      const { seq, lookupJson } = await fetchGeneSequence(geneName);
+      const { seq, maskedSeq, lookupJson } = await fetchGeneSequence(geneName);
       setLookupInfo({
         displayName: lookupJson.display_name || geneName,
         id: lookupJson.id,
@@ -64,7 +64,7 @@ export default function GeneLookupWidget({
         end: lookupJson.end,
         strand: lookupJson.strand,
         assembly: lookupJson.assembly_name,
-      });
+      }, maskedSeq);
     } catch (e) {
       setError(String(e));
       setLookupInfo(null);

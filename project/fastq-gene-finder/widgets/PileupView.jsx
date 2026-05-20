@@ -10,6 +10,9 @@ const NUCLEOTIDE_COLORS = {
 
 function renderColoredSequence(sequence, monoFont, refSequence = null) {
   return Array.from(sequence || "").map((char, index) => {
+    if (char === "~") {
+      return <span key={index} style={{ color: "#bbb", fontFamily: monoFont }}>~</span>;
+    }
     const color = NUCLEOTIDE_COLORS[char.toUpperCase()] || "#111";
     const mismatch = refSequence && char !== " " &&
       refSequence[index] && char.toUpperCase() !== refSequence[index].toUpperCase();
@@ -64,8 +67,17 @@ export default function PileupView({
 
   const normalizedMatches = matchingReads
     .map((m) => {
-      const start = m.position ?? m.positions?.[0];
       const seq = m.read || "";
+      if (m.junctions?.length) {
+        const first = m.junctions[0];
+        const last  = m.junctions[m.junctions.length - 1];
+        return {
+          ...m, seq,
+          start: first.gStart,
+          end:   last.gStart + (last.readEnd - last.readStart),
+        };
+      }
+      const start = m.position ?? m.positions?.[0];
       return {
         ...m,
         start,
@@ -103,44 +115,100 @@ export default function PileupView({
   );
 
   const rows = [];
+
   for (const m of visibleMatches) {
-    const offset = Math.max(0, m.start - safeWindowStart);
-    const clipStart = Math.max(0, safeWindowStart - m.start);
-    const clipEnd = Math.min(m.seq.length, windowEnd - m.start);
-    const clippedSeq = m.seq.slice(clipStart, clipEnd);
+    if (m.junctions?.length) {
+      // Split-read: place each exon segment at its correct gene offset, bridge between them
+      const placements = [];
 
-    if (!clippedSeq.length) continue;
+      for (let si = 0; si < m.junctions.length; si++) {
+        const seg = m.junctions[si];
+        const segGEnd = seg.gStart + (seg.readEnd - seg.readStart);
 
-    let placed = false;
+        const visStart = Math.max(seg.gStart, safeWindowStart);
+        const visEnd   = Math.min(segGEnd, windowEnd);
+        for (let gi = visStart; gi < visEnd; gi++) {
+          const readIdx = seg.readStart + (gi - seg.gStart);
+          placements.push([gi - safeWindowStart, m.seq[readIdx] ?? " "]);
+        }
 
-    for (const row of rows) {
-      let conflict = false;
-      for (let i = 0; i < clippedSeq.length && offset + i < regionLen; i++) {
-        if (row[offset + i] !== " ") {
-          conflict = true;
+        // Bridge to next segment if both are (partially) in this window
+        if (si + 1 < m.junctions.length) {
+          const nextSeg = m.junctions[si + 1];
+          const visBStart = Math.max(segGEnd,       safeWindowStart);
+          const visBEnd   = Math.min(nextSeg.gStart, windowEnd);
+          for (let gi = visBStart; gi < visBEnd; gi++) {
+            placements.push([gi - safeWindowStart, "~"]);
+          }
+        }
+      }
+
+      if (!placements.length) continue;
+
+      let placed = false;
+      for (const row of rows) {
+        let conflict = false;
+        for (const [offset] of placements) {
+          if (offset >= 0 && offset < regionLen && row[offset] !== " ") { conflict = true; break; }
+        }
+        if (!conflict) {
+          for (const [offset, ch] of placements) {
+            if (offset >= 0 && offset < regionLen) row[offset] = ch;
+          }
+          placed = true;
           break;
         }
       }
-      if (!conflict) {
-        for (let i = 0; i < clippedSeq.length && offset + i < regionLen; i++) {
-          row[offset + i] = clippedSeq[i];
+      if (!placed) {
+        const newRow = Array(regionLen).fill(" ");
+        for (const [offset, ch] of placements) {
+          if (offset >= 0 && offset < regionLen) newRow[offset] = ch;
         }
-        placed = true;
-        break;
+        rows.push(newRow);
       }
-    }
 
-    if (!placed) {
-      const newRow = Array(regionLen).fill(" ");
-      for (let i = 0; i < clippedSeq.length && offset + i < regionLen; i++) {
-        newRow[offset + i] = clippedSeq[i];
+    } else {
+      // Plain read — existing logic unchanged
+      const offset = Math.max(0, m.start - safeWindowStart);
+      const clipStart = Math.max(0, safeWindowStart - m.start);
+      const clipEnd = Math.min(m.seq.length, windowEnd - m.start);
+      const clippedSeq = m.seq.slice(clipStart, clipEnd);
+
+      if (!clippedSeq.length) continue;
+
+      let placed = false;
+
+      for (const row of rows) {
+        let conflict = false;
+        for (let i = 0; i < clippedSeq.length && offset + i < regionLen; i++) {
+          if (row[offset + i] !== " ") {
+            conflict = true;
+            break;
+          }
+        }
+        if (!conflict) {
+          for (let i = 0; i < clippedSeq.length && offset + i < regionLen; i++) {
+            row[offset + i] = clippedSeq[i];
+          }
+          placed = true;
+          break;
+        }
       }
-      rows.push(newRow);
+
+      if (!placed) {
+        const newRow = Array(regionLen).fill(" ");
+        for (let i = 0; i < clippedSeq.length && offset + i < regionLen; i++) {
+          newRow[offset + i] = clippedSeq[i];
+        }
+        rows.push(newRow);
+      }
     }
   }
 
   const underline =
     windowGene && windowGene.length ? "-".repeat(windowGene.length) : "";
+
+  const splicedCount = visibleMatches.filter((m) => m.source === "spliced").length;
 
   return (
     <div style={{ ...Styles.pileupContainer, overflowX: "hidden" }}>
@@ -181,6 +249,11 @@ export default function PileupView({
           <span style={{ marginLeft: "0.75rem" }}>
             {visibleMatches.length} reads visible
           </span>
+          {splicedCount > 0 && (
+            <span style={{ marginLeft: "0.75rem", color: "#0a9" }}>
+              ({splicedCount} spliced)
+            </span>
+          )}
         </div>
 
         {rows.map((row, i) => (

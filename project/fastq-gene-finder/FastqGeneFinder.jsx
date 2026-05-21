@@ -393,10 +393,66 @@ function computeSeedStatsAsync(
 }
 
 /* ============================================================
+   PAIR VALIDATION (module-level, no hooks)
+============================================================ */
+function buildValidatedPairs(r1MatchMap, r2Matches, { minInsert, maxInsert, rnaMode, readLength }) {
+  const pairs = [];
+  const greyedR1 = [];
+  const r2ByIndex = new Map();
+
+  for (const r2 of r2Matches) {
+    const bucket = r2ByIndex.get(r2.index) ?? [];
+    bucket.push(r2);
+    r2ByIndex.set(r2.index, bucket);
+  }
+
+  for (const [, r1] of r1MatchMap) {
+    const candidates = r2ByIndex.get(r1.index);
+    if (!candidates?.length) {
+      greyedR1.push({ ...r1, pairedStatus: "unconfirmed" });
+      continue;
+    }
+
+    let best;
+    if (rnaMode) {
+      // Pick candidate closest to either end of R1
+      const r1Start = r1.position ?? r1.positions?.[0] ?? 0;
+      const r1End   = r1Start + (readLength ?? 100);
+      best = candidates.reduce((a, b) => {
+        const aPos = a.position ?? a.positions?.[0] ?? 0;
+        const bPos = b.position ?? b.positions?.[0] ?? 0;
+        const aDist = Math.min(Math.abs(aPos - r1Start), Math.abs(aPos - r1End));
+        const bDist = Math.min(Math.abs(bPos - r1Start), Math.abs(bPos - r1End));
+        return aDist <= bDist ? a : b;
+      });
+    } else {
+      best = candidates.find((r2) => {
+        const r1Pos = r1.position ?? r1.positions?.[0] ?? 0;
+        const r2Pos = r2.position ?? r2.positions?.[0] ?? 0;
+        const d = Math.abs(r2Pos - r1Pos);
+        return d >= minInsert && d <= maxInsert && r1.orientation !== r2.orientation;
+      });
+    }
+
+    if (best) {
+      const r1Pos = r1.position ?? r1.positions?.[0] ?? 0;
+      const r2Pos = best.position ?? best.positions?.[0] ?? 0;
+      pairs.push({ r1, r2: best, insertSize: Math.abs(r2Pos - r1Pos) });
+    } else {
+      greyedR1.push({ ...r1, pairedStatus: "unconfirmed" });
+    }
+  }
+
+  return { pairs, greyedR1 };
+}
+
+/* ============================================================
    MAIN COMPONENT: FastqGeneFinder
 ============================================================ */
 export default function FastqGeneFinderApp() {
   const [files, setFiles] = useState([]);
+  const [r2File, setR2File] = useState(null);
+  const [seqMode, setSeqMode] = useState("DNA");
   const [geneName, setGeneName] = useState("");
   const [geneSequence, setGeneSequence] = useState("");
   const [geneInfo, setGeneInfo] = useState(null);
@@ -405,6 +461,9 @@ export default function FastqGeneFinderApp() {
   const [readLength, setReadLength] = useState(null);
   const [seedArrays, setSeedArrays] = useState([]);
   const [matchingReads, setMatchingReads] = useState([]);
+  const [r2Matches, setR2Matches] = useState([]);
+  const [validatedPairs, setValidatedPairs] = useState([]);
+  const [greyedR1Reads, setGreyedR1Reads] = useState([]);
   const [status, setStatus] = useState("idle");
   const [progress, setProgress] = useState({ done: 0, total: 0, fileName: "" });
   const [keptCount, setKeptCount] = useState(0);
@@ -441,9 +500,16 @@ export default function FastqGeneFinderApp() {
   const startTimeRef = useRef(null);
   const pauseStartTimeRef = useRef(null);
   const totalPausedMsRef = useRef(0);
+  const r1MatchMapRef = useRef(null);
 
   const [, setTimerTick] = useState(0);
   const [finalElapsedMs, setFinalElapsedMs] = useState(null);
+  const [r1Stats, setR1Stats] = useState(null);   // frozen after R1 completes
+  const [r2KeptCount, setR2KeptCount] = useState(0);
+
+  // Derived insert range from seqMode
+  const minInsert = 50;
+  const maxInsert = seqMode === "RNA" ? 1_000_000 : 1000;
 
   useEffect(() => {
     return () => {
@@ -453,7 +519,7 @@ export default function FastqGeneFinderApp() {
   }, []);
 
   useEffect(() => {
-    if (status !== "processing") return;
+    if (status !== "processing" && status !== "processing-r2") return;
     const id = setInterval(() => setTimerTick((t) => t + 1), 500);
     return () => clearInterval(id);
   }, [status]);
@@ -485,7 +551,7 @@ export default function FastqGeneFinderApp() {
     !!geneSequence &&
     !!readLength &&
     !!seedArrays.length &&
-    status !== "processing";
+    !["processing", "processing-r2", "pairing"].includes(status);
 
   /* ---------------- Pileup (only active after processing completes) ---------------- */
   const pileupStep = 25;
@@ -493,8 +559,26 @@ export default function FastqGeneFinderApp() {
     1,
     Math.ceil((seedArrays?.length || 1) * pileupThresholdPct / 100),
   );
-  const pileupReads = processingFinished
+
+  const pairedMode = !!(r2File && (validatedPairs.length > 0 || greyedR1Reads.length > 0));
+
+  // Single-end pileup reads (used in non-paired mode and for navigation)
+  const singlePileupReads = processingFinished
     ? matchingReads.filter((read) => (read.score ?? 0) >= pileupMinScore)
+    : [];
+
+  // For pileup navigation: a flat list of read positions covering all modes
+  const pileupReads = pairedMode
+    ? [...validatedPairs.map((p) => p.r1), ...greyedR1Reads]
+        .filter((r) => (r.score ?? 0) >= pileupMinScore)
+    : singlePileupReads;
+
+  const pileupValidatedPairs = pairedMode
+    ? validatedPairs.filter((p) => (p.r1.score ?? 0) >= pileupMinScore)
+    : [];
+
+  const pileupGreyedR1 = pairedMode
+    ? greyedR1Reads.filter((r) => (r.score ?? 0) >= pileupMinScore)
     : [];
 
   const getReadStart = (read) => read.position ?? read.positions?.[0];
@@ -563,6 +647,9 @@ export default function FastqGeneFinderApp() {
       setGeneInfo(info || null);
       setMaskedGeneSeq(maskedSeq ?? null);
       setMatchingReads([]);
+      setR2Matches([]);
+      setValidatedPairs([]);
+      setGreyedR1Reads([]);
       setActiveTab("seeds");
 
       if (readLength) {
@@ -590,6 +677,9 @@ export default function FastqGeneFinderApp() {
     setMaskedGeneSeq(null);
     setSeedArrays([]);
     setMatchingReads([]);
+    setR2Matches([]);
+    setValidatedPairs([]);
+    setGreyedR1Reads([]);
     txDataRef.current = [];
     setStatus(files.length ? "awaiting-gene" : "idle");
   }, [files.length]);
@@ -606,19 +696,16 @@ export default function FastqGeneFinderApp() {
   }, [maskedGeneSeq, geneSequence, seedArrays, readLength]);
 
   /* ---------------- File selection ---------------- */
-  const handleFilesSelected = useCallback((selected) => {
-    setFiles(selected);
-    if (!selected.length) return;
-
-    const file = selected[0];
-
+  const initR1File = useCallback((file) => {
     setStatus("reading-file");
-    const fileName = file.name;
     setMatchingReads([]);
-    setProgress({ done: 0, total: 0, fileName: fileName });
+    setR2Matches([]);
+    setValidatedPairs([]);
+    setGreyedR1Reads([]);
+    r1MatchMapRef.current = null;
+    setProgress({ done: 0, total: 0, fileName: file.name });
     pauseRef.current = false;
     abortRef.current = false;
-
     setGeneSequence("");
     setSeedArrays([]);
 
@@ -634,6 +721,37 @@ export default function FastqGeneFinderApp() {
     }, 0);
   }, []);
 
+  const handleFilesSelected = useCallback(
+    (selected) => {
+      if (selected.length === 2) {
+        const [a, b] = selected;
+        const r1Pat = /_R1[_.]|_1\./i;
+        const r2Pat = /_R2[_.]|_2\./i;
+        if (r1Pat.test(a.name) && r2Pat.test(b.name)) {
+          setFiles([a]);
+          setR2File(b);
+          initR1File(a);
+          return;
+        }
+        if (r1Pat.test(b.name) && r2Pat.test(a.name)) {
+          setFiles([b]);
+          setR2File(a);
+          initR1File(b);
+          return;
+        }
+      }
+      setFiles(selected);
+      setR2File(null);
+      if (!selected.length) return;
+      initR1File(selected[0]);
+    },
+    [initR1File],
+  );
+
+  const handleR2FileSelected = useCallback((selected) => {
+    setR2File(selected[0] || null);
+  }, []);
+
   /* ---------------- Processing ---------------- */
   const BATCH_SIZE = 50000;
 
@@ -641,9 +759,17 @@ export default function FastqGeneFinderApp() {
     if (!files.length || !geneSequence || !seedArrays.length) return;
 
     const file = files[0];
+    const currentR2File = r2File; // capture for this processing run
+
     setStatus("processing");
     setProcessingFinished(false);
     setMatchingReads([]);
+    setR2Matches([]);
+    setValidatedPairs([]);
+    setGreyedR1Reads([]);
+    r1MatchMapRef.current = null;
+    setR1Stats(null);
+    setR2KeptCount(0);
     setKeptCount(0);
     setDiscardedCount(0);
     pauseRef.current = false;
@@ -689,9 +815,6 @@ export default function FastqGeneFinderApp() {
     );
     workersRef.current = workers;
 
-    // Batch dispatch helpers (defined before wiring handlers so they close over workers)
-    // pendingBatchRef holds a queue of pre-packaged batch arrays — shift() on a small
-    // queue is O(queue_length), not O(total_reads), unlike splice on a flat read array.
     const dispatchBatch = (workerIdx) => {
       const reads = pendingBatchRef.current.shift();
       const batchId = nextBatchIdRef.current++;
@@ -713,7 +836,6 @@ export default function FastqGeneFinderApp() {
     };
 
     const flushFinalBatch = () => {
-      // Package any partial final batch that hasn't reached BATCH_SIZE
       if (currentBatchRef.current.length > 0) {
         pendingBatchRef.current.push(currentBatchRef.current);
         currentBatchRef.current = [];
@@ -744,7 +866,8 @@ export default function FastqGeneFinderApp() {
         );
         setWorkerStates((prev) => prev.map((w) => ({ ...w, status: "done" })));
         setProcessingFinished(true);
-        setStatus("done");
+        // If R2 file is present, signal R2 pass; otherwise fully done
+        setStatus(currentR2File ? "done-r1" : "done");
       }
     };
 
@@ -768,8 +891,6 @@ export default function FastqGeneFinderApp() {
       }
     };
 
-    // Flush accumulated matches to React state at most 2×/s — keeps ResultsView/PileupView
-    // re-renders from competing with worker throughput
     const syncMatchDisplay = (force = false) => {
       const now = Date.now();
       if (
@@ -877,7 +998,212 @@ export default function FastqGeneFinderApp() {
 
     flushFinalBatch();
     checkDone();
-  }, [files, geneSequence, seedArrays, readLength, workerCount]);
+  }, [files, geneSequence, seedArrays, readLength, workerCount, matchThresholdPct, r2File]);
+
+  /* ---------------- R2 pass (triggered after R1 completes with r2File set) ---------------- */
+  const runR2Pass = useCallback(async () => {
+    if (!r2File || !indicesRef.current || !r1MatchMapRef.current) return;
+
+    const r2Map = r1MatchMapRef.current;
+    setStatus("processing-r2");
+    setProgress({ done: 0, total: 0, fileName: r2File.name });
+    setR2KeptCount(0);
+    setFinalElapsedMs(null);
+    startTimeRef.current    = Date.now();
+    pauseStartTimeRef.current = null;
+    totalPausedMsRef.current  = 0;
+    pauseRef.current = false;
+
+    batchesDispatchedRef.current = 0;
+    batchesReturnedRef.current = 0;
+    streamDoneRef.current = false;
+    pendingBatchRef.current = [];
+    currentBatchRef.current = [];
+    idleWorkersRef.current = [];
+    nextBatchIdRef.current = 0;
+
+    const r2Accumulated = [];
+    let lastR2Sync = 0;
+    const syncR2Display = () => {
+      const now = Date.now();
+      if (now - lastR2Sync >= 500) {
+        lastR2Sync = now;
+        setR2KeptCount(r2Accumulated.length);
+      }
+    };
+
+    const seedIndices = indicesRef.current;
+    const minSeedMatches = Math.max(
+      1,
+      Math.ceil((seedArrays.length || 1) * matchThresholdPct / 100),
+    );
+    const actualWorkerCount = Math.max(1, workerCount);
+
+    const workers = Array.from(
+      { length: actualWorkerCount },
+      () =>
+        new Worker(new URL("./fastq-search.worker.js", import.meta.url), {
+          type: "module",
+        }),
+    );
+    workersRef.current = workers;
+
+    const dispatchBatch = (workerIdx) => {
+      const reads = pendingBatchRef.current.shift();
+      const batchId = nextBatchIdRef.current++;
+      batchesDispatchedRef.current++;
+      workers[workerIdx].postMessage({ type: "batch", payload: { batchId, reads } });
+    };
+
+    const drainPendingBatches = () => {
+      while (pendingBatchRef.current.length > 0 && idleWorkersRef.current.length > 0) {
+        const workerIdx = idleWorkersRef.current.shift();
+        dispatchBatch(workerIdx);
+      }
+    };
+
+    const currentSeqMode = seqMode;
+    const currentReadLength = readLength;
+    const currentMinInsert = minInsert;
+    const currentMaxInsert = maxInsert;
+
+    const checkDoneR2 = () => {
+      if (
+        streamDoneRef.current &&
+        currentBatchRef.current.length === 0 &&
+        pendingBatchRef.current.length === 0 &&
+        batchesDispatchedRef.current === batchesReturnedRef.current
+      ) {
+        workersRef.current.forEach((w) => w.terminate());
+        workersRef.current = [];
+        setFinalElapsedMs(startTimeRef.current != null ? Date.now() - startTimeRef.current : 0);
+        setR2KeptCount(r2Accumulated.length);
+
+        // Run pairing validation
+        const { pairs, greyedR1 } = buildValidatedPairs(
+          r2Map,
+          r2Accumulated,
+          {
+            minInsert: currentMinInsert,
+            maxInsert: currentMaxInsert,
+            rnaMode: currentSeqMode === "RNA",
+            readLength: currentReadLength,
+          },
+        );
+
+        setR2Matches(r2Accumulated.slice());
+        setValidatedPairs(pairs);
+        setGreyedR1Reads(greyedR1);
+        setProcessingFinished(true);
+        setStatus("done");
+      }
+    };
+
+    let readyCount = 0;
+    let resolveAllReady;
+    const allReadyPromise = new Promise((res) => { resolveAllReady = res; });
+
+    workers.forEach((w, i) => {
+      w.onmessage = ({ data }) => {
+        if (data.type === "ready") {
+          idleWorkersRef.current.push(i);
+          readyCount++;
+          if (readyCount === actualWorkerCount) resolveAllReady();
+          return;
+        }
+        if (data.type === "result") {
+          batchesReturnedRef.current++;
+          const { matches } = data;
+          if (matches.length > 0) r2Accumulated.push(...matches);
+          syncR2Display();
+          idleWorkersRef.current.push(i);
+          drainPendingBatches();
+          checkDoneR2();
+        }
+        if (data.type === "error") {
+          batchesReturnedRef.current++;
+          idleWorkersRef.current.push(i);
+          drainPendingBatches();
+          checkDoneR2();
+        }
+      };
+      w.onerror = () => {
+        batchesReturnedRef.current++;
+        idleWorkersRef.current.push(i);
+        drainPendingBatches();
+        checkDoneR2();
+      };
+    });
+
+    workers.forEach((w) =>
+      w.postMessage({
+        type: "init",
+        payload: { seedArrays, seedIndices, minSeedMatches, txData: txDataRef.current },
+      }),
+    );
+    await allReadyPromise;
+
+    await streamFastq({
+      file: r2File,
+      batchSize: BATCH_SIZE,
+      onRead: (seqBytes, qualBytes, index) => {
+        if (!r2Map.has(index)) return; // skip reads whose R1 did not match
+        currentBatchRef.current.push({ seqBytes, qualBytes, index });
+        if (currentBatchRef.current.length >= BATCH_SIZE) {
+          pendingBatchRef.current.push(currentBatchRef.current);
+          currentBatchRef.current = [];
+          drainPendingBatches();
+        }
+      },
+      pauseRef,
+      abortRef,
+      onProgress: (done, total, fileName) => setProgress({ done, total, fileName }),
+      tick,
+    });
+
+    streamDoneRef.current = true;
+
+    if (abortRef.current) return;
+
+    if (currentBatchRef.current.length > 0) {
+      pendingBatchRef.current.push(currentBatchRef.current);
+      currentBatchRef.current = [];
+    }
+    drainPendingBatches();
+    checkDoneR2();
+  }, [r2File, seedArrays, workerCount, matchThresholdPct, seqMode, readLength, minInsert, maxInsert]);
+
+  // Trigger R2 pass when R1 completes with an R2 file set.
+  // matchingReads is final at this point — R1's checkDone() called syncMatchDisplay(true)
+  // then setStatus("done-r1") in the same React batch, so this effect sees the final matches.
+  useEffect(() => {
+    if (status !== "done-r1") return;
+    if (!r2File) { setStatus("done"); return; }
+
+    // Freeze R1 stats for comparison display
+    const r1TotalReads = totalReadsRef.current;
+    const r1Kept       = matchingReads.length;
+    setR1Stats({
+      fileName:      progress.fileName,
+      fileSizeDone:  progress.done,
+      fileSizeTotal: progress.total,
+      totalReads:    r1TotalReads,
+      keptCount:     r1Kept,
+      elapsedMs:     finalElapsedMs ?? 0,
+      readsPerSec:   r1TotalReads > 0 && (finalElapsedMs ?? 0) > 0
+        ? Math.round(r1TotalReads / ((finalElapsedMs ?? 1) / 1000))
+        : null,
+    });
+
+    // Sort R1 matches by FASTQ line number (workers finish out of order)
+    const sorted = [...matchingReads].sort(
+      (a, b) => (a.fastqSequenceLine ?? 0) - (b.fastqSequenceLine ?? 0),
+    );
+    r1MatchMapRef.current = new Map(sorted.map((m) => [m.index, m]));
+
+    setTimeout(() => { runR2Pass(); }, 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
 
   const handlePauseResume = () => {
     if (status === "processing") {
@@ -939,6 +1265,13 @@ export default function FastqGeneFinderApp() {
     marginBottom: "-2px",
   });
 
+  const dropzoneAccept = {
+    "text/plain": [".fastq", ".fq"],
+    "application/gzip": [".fastq.gz", ".fq.gz"],
+    "application/x-gzip": [".fastq.gz", ".fq.gz"],
+    "application/octet-stream": [".fastq", ".fq", ".fastq.gz", ".fq.gz"],
+  };
+
   return (
     <div style={{ ...Styles.container, paddingBottom: "50vh" }}>
       <h2>Sparse Seed‑n‑Vote Gene Finder</h2>
@@ -965,28 +1298,44 @@ export default function FastqGeneFinderApp() {
           alignItems: "flex-start",
         }}
       >
-        <div style={{ flex: 1, minWidth: 0 }}>
+        {/* Left column: R1 drop zone + mode selector + R2 drop zone */}
+        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "0.5rem" }}>
           <DropZone
             onFilesSelected={handleFilesSelected}
-            accept={{
-              "text/plain": [".fastq", ".fq"],
-              "application/gzip": [".fastq.gz", ".fq.gz"],
-              "application/x-gzip": [".fastq.gz", ".fq.gz"],
-              "application/octet-stream": [
-                ".fastq",
-                ".fq",
-                ".fastq.gz",
-                ".fq.gz",
-              ],
-            }}
-            label="Drop (single-end or R1 of paired-end) .fastq/.gz or click to select"
+            accept={dropzoneAccept}
+            label="Drop R1 (or single-end) .fastq/.gz, or drop both R1+R2 together"
             multiple={true}
             selectedFiles={files}
             fileInfo={
               readLength ? [{ label: "Read Length", value: readLength }] : []
             }
           />
+          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "12px", fontFamily: "monospace" }}>
+            <label>
+              Mode:
+              <select
+                value={seqMode}
+                onChange={(e) => setSeqMode(e.target.value)}
+                style={{ marginLeft: "0.4rem", fontSize: "12px" }}
+                title="DNA: paired ends within ~1000 bp. RNA: same gene, up to 1 Mbp apart."
+              >
+                <option value="DNA">DNA</option>
+                <option value="RNA">RNA</option>
+              </select>
+            </label>
+            <span style={{ color: "#888" }}>
+              {seqMode === "RNA" ? "insert ≤ 1 Mbp" : `insert ${minInsert}–${maxInsert} bp`}
+            </span>
+          </div>
+          <DropZone
+            onFilesSelected={handleR2FileSelected}
+            accept={dropzoneAccept}
+            label="Drop R2 .fastq/.gz here (optional)"
+            multiple={false}
+            selectedFiles={r2File ? [r2File] : []}
+          />
         </div>
+
         <div style={{ flex: 1, minWidth: 0 }}>
           <GeneLookupWidget
             geneName={geneName}
@@ -1013,6 +1362,8 @@ export default function FastqGeneFinderApp() {
             workerStates={workerStates}
             matchThresholdPct={matchThresholdPct}
             onMatchThresholdChange={setMatchThresholdPct}
+            r1Stats={r1Stats}
+            r2KeptCount={r2KeptCount}
           />
         </div>
       </div>
@@ -1051,7 +1402,12 @@ export default function FastqGeneFinderApp() {
       {/* Tab: Matched Reads */}
       {activeTab === "reads" && (
         <div style={{ marginTop: "1rem" }}>
-          <ResultsView matchingReads={matchingReads} seedArrays={seedArrays} />
+          <ResultsView
+            matchingReads={matchingReads}
+            seedArrays={seedArrays}
+            validatedPairs={validatedPairs}
+            greyedR1={greyedR1Reads}
+          />
         </div>
       )}
 
@@ -1067,7 +1423,7 @@ export default function FastqGeneFinderApp() {
       {/* Tab: Pileup */}
       {activeTab === "pileup" && (
         <div style={{ marginTop: "1rem" }}>
-          {!processingFinished || matchingReads.length === 0 ? (
+          {!processingFinished || (matchingReads.length === 0 && validatedPairs.length === 0 && greyedR1Reads.length === 0) ? (
             <div style={{ color: "#888", fontFamily: "monospace" }}>
               No matches yet — run processing first.
             </div>
@@ -1075,7 +1431,7 @@ export default function FastqGeneFinderApp() {
             <>
               <CoverageOverview
                 geneSequence={geneSequence}
-                matchingReads={pileupReads}
+                matchingReads={pairedMode ? pileupReads : singlePileupReads}
                 readLength={readLength || 100}
                 windowStart={pileupWindowStart}
                 windowSize={pileupWindowSize}
@@ -1151,14 +1507,21 @@ export default function FastqGeneFinderApp() {
                 <span style={{ fontSize: "12px" }}>
                   — showing {pileupReads.length} reads. Window starts at {pileupWindowStart}.
                 </span>
+                {pairedMode && (
+                  <span style={{ fontSize: "12px", color: Styles.pairConnectorColor }}>
+                    {validatedPairs.length} paired, {greyedR1Reads.length} unconfirmed
+                  </span>
+                )}
               </div>
               <PileupView
                 geneSequence={geneSequence}
-                matchingReads={pileupReads}
-                readLength={pileupReads[0]?.read?.length}
+                matchingReads={pairedMode ? [] : singlePileupReads}
+                readLength={readLength}
                 windowStart={pileupWindowStart}
                 windowSize={pileupWindowSize}
                 geneInfo={geneInfo}
+                validatedPairs={pileupValidatedPairs}
+                greyedR1={pileupGreyedR1}
               />
             </>
           )}

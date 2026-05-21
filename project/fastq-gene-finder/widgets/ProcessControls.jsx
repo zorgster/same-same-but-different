@@ -39,9 +39,12 @@ export default function ProcessControls({
   workerStates,
   matchThresholdPct,
   onMatchThresholdChange,
+  r1Stats = null,
+  r2KeptCount = 0,
 }) {
   const isAborted = status === "aborted";
-  const isActive = status === "processing" || status === "paused";
+  const isActive = ["processing", "paused", "processing-r2"].includes(status);
+  const canPause = status === "processing" || status === "paused";
 
   const fmtNumber = (n) => {
     if (n == null) return "?";
@@ -95,7 +98,7 @@ export default function ProcessControls({
 
         <button
           onClick={onPauseResume}
-          disabled={!isActive}
+          disabled={!canPause}
         >
           {status === "paused" ? "Resume" : "Pause"}
         </button>
@@ -160,37 +163,100 @@ export default function ProcessControls({
           lineHeight: 1.6,
         }}
       >
-        <div>
-          <strong>File progress:</strong>{" "}
-          {fmtBytes(progress?.done)} / {fmtBytes(progress?.total)}
-          {progress?.total > 0 && progress?.done > 0 && (
-            <span style={{ color: COLORS.muted, marginLeft: "0.5rem" }}>
-              ({Math.min(100, Math.round((progress.done / progress.total) * 100))}%)
-            </span>
-          )}
-        </div>
-        <div>
-          <strong>Reads:</strong> {fmtNumber(totalReads || 0)} processed |{" "}
-          <strong>Kept:</strong> {fmtNumber(keptCount)}
-          {totalReads > 0 && keptCount >= 0 && (
-            <span style={{ color: COLORS.muted, marginLeft: "0.4rem" }}>
-              ({Math.round((keptCount / totalReads) * 100)}%)
-            </span>
-          )}
-        </div>
-        {(elapsedMs > 0 || status === "done" || isAborted) && (
-          <div>
-            <strong>Elapsed:</strong>{" "}
-            {fmtElapsed(elapsedMs)}
-            {readsPerSec != null && (
-              <span style={{ color: COLORS.muted, marginLeft: "0.75rem" }}>
-                {fmtNumber(readsPerSec)} reads/s
-              </span>
+        {r1Stats ? (
+          /* ── Paired mode: two-row comparison ── */
+          <table style={{ borderCollapse: "collapse", width: "100%", fontSize: "11px" }}>
+            <thead>
+              <tr style={{ color: COLORS.muted, fontSize: "10px" }}>
+                <th style={{ textAlign: "left",  paddingRight: "0.5rem", fontWeight: 600 }}></th>
+                <th style={{ textAlign: "right", paddingRight: "0.75rem", fontWeight: 400 }}>File</th>
+                <th style={{ textAlign: "right", paddingRight: "0.75rem", fontWeight: 400 }}>Reads</th>
+                <th style={{ textAlign: "right", paddingRight: "0.75rem", fontWeight: 400 }}>Kept</th>
+                <th style={{ textAlign: "right", paddingRight: "0.75rem", fontWeight: 400 }}>Elapsed</th>
+                <th style={{ textAlign: "right", fontWeight: 400 }}>Speed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {/* R1 row — frozen */}
+              <tr>
+                <td style={{ paddingRight: "0.5rem", fontWeight: 700, color: COLORS.accent }}>R1</td>
+                <td style={{ textAlign: "right", paddingRight: "0.75rem" }}>
+                  {fmtBytes(r1Stats.fileSizeDone)}
+                  <span style={{ color: COLORS.muted }}> / {fmtBytes(r1Stats.fileSizeTotal)} (100%)</span>
+                </td>
+                <td style={{ textAlign: "right", paddingRight: "0.75rem" }}>
+                  {fmtNumber(r1Stats.totalReads)}
+                </td>
+                <td style={{ textAlign: "right", paddingRight: "0.75rem" }}>
+                  {fmtNumber(r1Stats.keptCount)}
+                  <span style={{ color: COLORS.muted }}>
+                    {" "}({r1Stats.totalReads > 0 ? Math.round(r1Stats.keptCount / r1Stats.totalReads * 100) : 0}%)
+                  </span>
+                </td>
+                <td style={{ textAlign: "right", paddingRight: "0.75rem" }}>{fmtElapsed(r1Stats.elapsedMs)}</td>
+                <td style={{ textAlign: "right", color: COLORS.muted }}>
+                  {r1Stats.readsPerSec != null ? `${fmtNumber(r1Stats.readsPerSec)}/s` : ""}
+                </td>
+              </tr>
+              {/* R2 row — live */}
+              <tr>
+                <td style={{ paddingRight: "0.5rem", fontWeight: 700, color: "#7bb3d4" }}>R2</td>
+                <td style={{ textAlign: "right", paddingRight: "0.75rem" }}>
+                  {fmtBytes(progress?.done)}
+                  <span style={{ color: COLORS.muted }}>
+                    {" "}/ {fmtBytes(progress?.total)}
+                    {progress?.total > 0 && progress?.done > 0 &&
+                      ` (${Math.min(100, Math.round(progress.done / progress.total * 100))}%)`}
+                  </span>
+                </td>
+                <td style={{ textAlign: "right", paddingRight: "0.75rem", color: COLORS.muted }}>—</td>
+                <td style={{ textAlign: "right", paddingRight: "0.75rem" }}>
+                  {fmtNumber(r2KeptCount)}
+                  <span style={{ color: COLORS.muted }}> matched</span>
+                </td>
+                <td style={{ textAlign: "right", paddingRight: "0.75rem" }}>
+                  {elapsedMs > 0 ? fmtElapsed(elapsedMs) : "—"}
+                </td>
+                <td style={{ textAlign: "right", color: COLORS.muted }}>—</td>
+              </tr>
+            </tbody>
+          </table>
+        ) : (
+          /* ── Single-end mode: original layout ── */
+          <>
+            <div>
+              <strong>File progress:</strong>{" "}
+              {fmtBytes(progress?.done)} / {fmtBytes(progress?.total)}
+              {progress?.total > 0 && progress?.done > 0 && (
+                <span style={{ color: COLORS.muted, marginLeft: "0.5rem" }}>
+                  ({Math.min(100, Math.round((progress.done / progress.total) * 100))}%)
+                </span>
+              )}
+            </div>
+            <div>
+              <strong>Reads:</strong> {fmtNumber(totalReads || 0)} processed |{" "}
+              <strong>Kept:</strong> {fmtNumber(keptCount)}
+              {totalReads > 0 && keptCount >= 0 && (
+                <span style={{ color: COLORS.muted, marginLeft: "0.4rem" }}>
+                  ({Math.round((keptCount / totalReads) * 100)}%)
+                </span>
+              )}
+            </div>
+            {(elapsedMs > 0 || status === "done" || isAborted) && (
+              <div>
+                <strong>Elapsed:</strong>{" "}
+                {fmtElapsed(elapsedMs)}
+                {readsPerSec != null && (
+                  <span style={{ color: COLORS.muted, marginLeft: "0.75rem" }}>
+                    {fmtNumber(readsPerSec)} reads/s
+                  </span>
+                )}
+              </div>
             )}
-          </div>
+          </>
         )}
         {isAborted && (
-          <div style={{ color: COLORS.error }}>
+          <div style={{ color: COLORS.error, marginTop: "0.25rem" }}>
             <strong>Processing aborted.</strong>
           </div>
         )}

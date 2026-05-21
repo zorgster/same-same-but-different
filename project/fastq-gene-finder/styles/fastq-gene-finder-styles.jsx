@@ -138,6 +138,9 @@ export const modalCard = {
   lineHeight: 1.5,
 };
 
+export const pairConnectorColor = "#7bb3d4";
+export const spliceConnectorColor = "#0a9";
+
 export const modalCloseButton = {
   position: "absolute",
   top: "0.5rem",

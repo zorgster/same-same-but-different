@@ -68,6 +68,7 @@ export default function CoverageOverview({
   const [txLoading,   setTxLoading]   = useState(false);
   const [txError,     setTxError]     = useState(null);
   const [showZoom,    setShowZoom]    = useState(false);
+  const [hoveredTx,   setHoveredTx]   = useState(null); // { tx, x, y, idx }
 
   // Reset transcripts when gene changes
   useEffect(() => {
@@ -304,6 +305,24 @@ export default function CoverageOverview({
     )));
   };
 
+  const handleMouseMove = (e) => {
+    if (!transcripts?.length) return;
+    const rect = canvasRef.current.getBoundingClientRect();
+    const mouseY = e.clientY - rect.top;
+    // Y positions mirror the draw effect
+    const exonY   = COV_H + GAP;
+    const txAreaY = exonY + EXON_H + GAP;
+    const txStartY = txAreaY + TX_HEADER_H;
+    const idx = Math.floor((mouseY - txStartY) / (TX_ROW_H + TX_ROW_GAP));
+    if (idx >= 0 && idx < transcripts.length) {
+      setHoveredTx({ tx: transcripts[idx], clientX: e.clientX, clientY: e.clientY, idx });
+    } else {
+      setHoveredTx(null);
+    }
+  };
+
+  const handleMouseLeave = () => setHoveredTx(null);
+
   return (
     <div
       ref={containerRef}
@@ -314,8 +333,37 @@ export default function CoverageOverview({
         ref={canvasRef}
         style={{ display: "block", width: "100%", height: H, cursor: "crosshair" }}
         onClick={handleClick}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={handleMouseLeave}
         title="Click to jump pileup to this position"
       />
+
+      {/* Transcript hover tooltip */}
+      {hoveredTx && (
+        <div style={{
+          position: "fixed",
+          left: hoveredTx.clientX + 12,
+          top:  hoveredTx.clientY - 8,
+          background: "#fff",
+          border: "1px solid #bbb",
+          borderRadius: 4,
+          padding: "4px 8px",
+          fontSize: 11,
+          fontFamily: '"Courier New", Courier, monospace',
+          pointerEvents: "none",
+          zIndex: 9999,
+          boxShadow: "0 2px 6px rgba(0,0,0,0.15)",
+          whiteSpace: "nowrap",
+        }}>
+          <span style={{ fontWeight: 700, color: hoveredTx.tx.isCanonical ? COLORS.accent : COLORS.text }}>
+            {hoveredTx.tx.isCanonical ? "★ " : ""}{hoveredTx.tx.id}
+          </span>
+          <span style={{ color: COLORS.muted, marginLeft: 6 }}>
+            {hoveredTx.tx.biotype}
+            {hoveredTx.tx.isCanonical ? " • canonical" : ""}
+          </span>
+        </div>
+      )}
 
       {/* Transcript controls + legend */}
       <div style={{ borderTop: `1px solid ${COLORS.border}`, padding: "3px 6px", display: "flex", alignItems: "flex-start", gap: "0.75rem", flexWrap: "wrap" }}>
@@ -339,14 +387,9 @@ export default function CoverageOverview({
             >
               Zoom
             </button>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "2px 12px", fontSize: 9, fontFamily: "monospace", lineHeight: 1.8 }}>
-              {transcripts.map((t) => (
-                <span key={t.id} style={{ color: t.isCanonical ? COLORS.accent : COLORS.muted }}>
-                  {t.isCanonical ? "★ " : ""}{t.id}
-                  {t.biotype !== "protein_coding" ? ` (${t.biotype})` : ""}
-                </span>
-              ))}
-            </div>
+            <span style={{ fontSize: 10, color: COLORS.muted, fontFamily: "monospace" }}>
+              {transcripts.length} transcript{transcripts.length !== 1 ? "s" : ""} — hover to identify
+            </span>
           </>
         )}
       </div>

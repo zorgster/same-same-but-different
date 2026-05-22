@@ -13,6 +13,7 @@ import SeedVisualization from "./widgets/SeedVisualization.jsx";
 import GeneLookupWidget from "./widgets/GeneLookupWidget.jsx";
 import * as Styles from "./styles/fastq-gene-finder-styles.jsx";
 import MoreInfoWidget from "./widgets/MoreInfoWidget.jsx";
+import { exportOverviewPdf, exportZoomWindowPdf } from "./utils/exportPdf.js";
 
 function makeSeedPositions(
   readLength,
@@ -22,14 +23,19 @@ function makeSeedPositions(
 ) {
   const start = Math.max(0, Math.floor(readLength * startFraction));
   const end = Math.max(start + 1, Math.ceil(readLength * endFraction));
-  const positions = new Set();
-
-  while (positions.size < positionsPerArray && positions.size < readLength) {
-    const position = Math.floor(start + Math.random() * (end - start));
-    positions.add(Math.max(0, Math.min(readLength - 1, position)));
+  const count = Math.min(positionsPerArray, end - start);
+  const positions = [];
+  let needed = count;
+  let remaining = end - start;
+  // Sequential sampling: adaptive probability guarantees exactly `count` positions
+  // in one forward pass — no rejection retries, no sort needed.
+  for (let i = start; i < end && needed > 0; i++, remaining--) {
+    if (Math.random() < needed / remaining) {
+      positions.push(i);
+      needed--;
+    }
   }
-
-  return [...positions].sort((a, b) => a - b);
+  return positions;
 }
 
 /* ============================================================
@@ -42,9 +48,9 @@ function concat(a, b) {
   return out;
 }
 
-function getFastqReadableStream(file, onCompressedBytes) {
+function getFastqReadableStream(file, onCompressedBytes, isCompressed = file.name.toLowerCase().endsWith(".gz")) {
   const raw = file.stream();
-  if (file.name.toLowerCase().endsWith(".gz")) {
+  if (isCompressed) {
     let count = 0;
     const counter = new TransformStream({
       transform(chunk, controller) {
@@ -109,11 +115,8 @@ async function streamFastq({
   const isCompressed = file.name.toLowerCase().endsWith(".gz");
   const stream = getFastqReadableStream(
     file,
-    isCompressed
-      ? (n) => {
-          compressedBytesRead = n;
-        }
-      : null,
+    isCompressed ? (n) => { compressedBytesRead = n; } : null,
+    isCompressed,
   );
   const reader = stream.getReader();
 
@@ -464,6 +467,8 @@ export default function FastqGeneFinderApp() {
   const [r2Matches, setR2Matches] = useState([]);
   const [validatedPairs, setValidatedPairs] = useState([]);
   const [greyedR1Reads, setGreyedR1Reads] = useState([]);
+  const [isPdfExporting, setIsPdfExporting] = useState(false);
+  const coverageRef = useRef(null);
   const [status, setStatus] = useState("idle");
   const [progress, setProgress] = useState({ done: 0, total: 0, fileName: "" });
   const [keptCount, setKeptCount] = useState(0);
@@ -1272,6 +1277,52 @@ export default function FastqGeneFinderApp() {
     "application/octet-stream": [".fastq", ".fq", ".fastq.gz", ".fq.gz"],
   };
 
+  function handleExportSeeds() {
+    if (!seedArrays.length) return;
+    const maxPos = Math.max(...seedArrays.map(s => s.positions.length));
+    const header = ["seedId", "label", ...Array.from({ length: maxPos }, (_, i) => `pos${i}`)].join(",");
+    const rows   = seedArrays.map(s =>
+      [s.id, s.label, ...s.positions].join(",")
+    );
+    const csv  = [header, ...rows].join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = `seeds-${geneName || "gene"}-${Date.now()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleExportPdf() {
+    if (isPdfExporting) return;
+    setIsPdfExporting(true);
+    try {
+      await exportOverviewPdf({
+        seqMode,
+        geneName,
+        geneInfo,
+        geneSequence,
+        maskedGeneSeq,
+        seedArrays,
+        matchingReads,
+        validatedPairs,
+        greyedR1Reads,
+        coverageDataUrl:    coverageRef.current?.getCanvasDataUrl() ?? null,
+        coverageDimensions: coverageRef.current?.getCanvasDimensions() ?? null,
+        coverageTranscripts: coverageRef.current?.getTranscripts() ?? null,
+        readLength: readLength || 100,
+        fileName: files[0]?.name || "",
+      });
+    } finally {
+      setIsPdfExporting(false);
+    }
+  }
+
+  async function handleExportWindowPdf(windowParams) {
+    await exportZoomWindowPdf(windowParams);
+  }
+
   return (
     <div style={{ ...Styles.container, paddingBottom: "50vh" }}>
       <h2>Sparse Seed‑n‑Vote Gene Finder</h2>
@@ -1384,6 +1435,14 @@ export default function FastqGeneFinderApp() {
       {/* Tab: Seeds */}
       {activeTab === "seeds" && (
         <div style={{ marginTop: "1rem" }}>
+          {seedArrays.length > 0 && (
+            <button
+              onClick={handleExportSeeds}
+              style={{ fontSize: "11px", padding: "2px 8px", marginBottom: "0.5rem", cursor: "pointer" }}
+            >
+              Export Seeds CSV
+            </button>
+          )}
           <SeedVisualization seedArrays={seedArrays} readLength={readLength} />
           <div
             style={{
@@ -1430,6 +1489,7 @@ export default function FastqGeneFinderApp() {
           ) : (
             <>
               <CoverageOverview
+                ref={coverageRef}
                 geneSequence={geneSequence}
                 matchingReads={pairedMode ? pileupReads : singlePileupReads}
                 readLength={readLength || 100}
@@ -1437,6 +1497,8 @@ export default function FastqGeneFinderApp() {
                 windowSize={pileupWindowSize}
                 onWindowJump={setPileupWindowStart}
                 geneInfo={geneInfo}
+                onExportPdf={handleExportPdf}
+                isPdfExporting={isPdfExporting}
               />
               <div
                 style={{
@@ -1522,6 +1584,7 @@ export default function FastqGeneFinderApp() {
                 geneInfo={geneInfo}
                 validatedPairs={pileupValidatedPairs}
                 greyedR1={pileupGreyedR1}
+                onExportWindowPdf={handleExportWindowPdf}
               />
             </>
           )}

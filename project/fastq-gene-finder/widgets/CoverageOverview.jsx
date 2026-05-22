@@ -1,4 +1,4 @@
-import { useRef, useEffect, useMemo, useState } from "react";
+import { useRef, useEffect, useMemo, useState, forwardRef, useImperativeHandle } from "react";
 import { COLORS } from "../../styles/light-theme";
 import TranscriptZoomModal from "./TranscriptZoomModal.jsx";
 
@@ -52,7 +52,7 @@ async function loadTranscripts(geneId) {
 }
 
 // ── Component ───────────────────────────────────────────────────────────────
-export default function CoverageOverview({
+const CoverageOverview = forwardRef(function CoverageOverview({
   geneSequence,
   matchingReads,
   readLength = 100,
@@ -60,7 +60,9 @@ export default function CoverageOverview({
   windowSize,
   onWindowJump,
   geneInfo,
-}) {
+  onExportPdf,
+  isPdfExporting = false,
+}, ref) {
   const containerRef = useRef(null);
   const canvasRef    = useRef(null);
   const [canvasWidth, setCanvasWidth] = useState(800);
@@ -69,6 +71,14 @@ export default function CoverageOverview({
   const [txError,     setTxError]     = useState(null);
   const [showZoom,    setShowZoom]    = useState(false);
   const [hoveredTx,   setHoveredTx]   = useState(null); // { tx, x, y, idx }
+
+  useImperativeHandle(ref, () => ({
+    getCanvasDataUrl:    () => canvasRef.current?.toDataURL("image/png") ?? null,
+    getCanvasDimensions: () => canvasRef.current
+      ? { w: canvasRef.current.width, h: canvasRef.current.height }
+      : null,
+    getTranscripts: () => transcripts,
+  }), [transcripts]);
 
   // Reset transcripts when gene changes
   useEffect(() => {
@@ -392,6 +402,15 @@ export default function CoverageOverview({
             </span>
           </>
         )}
+        {onExportPdf && (
+          <button
+            onClick={onExportPdf}
+            disabled={isPdfExporting}
+            style={{ fontSize: "11px", padding: "1px 8px", cursor: "pointer", whiteSpace: "nowrap", marginLeft: "auto" }}
+          >
+            {isPdfExporting ? "Generating…" : "Export PDF"}
+          </button>
+        )}
       </div>
 
       {showZoom && (
@@ -405,4 +424,6 @@ export default function CoverageOverview({
       )}
     </div>
   );
-}
+});
+
+export default CoverageOverview;

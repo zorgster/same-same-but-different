@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { FASTQ_GENE_FINDER_CONFIG } from "./fastq-gene-finder-config.js";
 import DropZone from "../widgets/DropZone.jsx";
 import PileupView from "./widgets/PileupView.jsx";
@@ -8,6 +8,7 @@ import ResultsView from "./widgets/ResultsView.jsx";
 import {
   MostUniquesPanel,
   PerSeedSummaryPanel,
+  TxSeedIndexPanel,
 } from "./widgets/SeedsStatsPanel.jsx";
 import SeedVisualization from "./widgets/SeedVisualization.jsx";
 import GeneLookupWidget from "./widgets/GeneLookupWidget.jsx";
@@ -48,7 +49,11 @@ function concat(a, b) {
   return out;
 }
 
-function getFastqReadableStream(file, onCompressedBytes, isCompressed = file.name.toLowerCase().endsWith(".gz")) {
+function getFastqReadableStream(
+  file,
+  onCompressedBytes,
+  isCompressed = file.name.toLowerCase().endsWith(".gz"),
+) {
   const raw = file.stream();
   if (isCompressed) {
     let count = 0;
@@ -115,7 +120,11 @@ async function streamFastq({
   const isCompressed = file.name.toLowerCase().endsWith(".gz");
   const stream = getFastqReadableStream(
     file,
-    isCompressed ? (n) => { compressedBytesRead = n; } : null,
+    isCompressed
+      ? (n) => {
+          compressedBytesRead = n;
+        }
+      : null,
     isCompressed,
   );
   const reader = stream.getReader();
@@ -260,8 +269,11 @@ function extractExonIntervals(maskedSeq) {
   for (let i = 0; i <= maskedSeq.length; i++) {
     const c = maskedSeq[i];
     const isExon = c >= "A" && c <= "Z";
-    if (start === -1 && isExon)       start = i;
-    else if (start !== -1 && !isExon) { intervals.push({ gStart: start, gEnd: i }); start = -1; }
+    if (start === -1 && isExon) start = i;
+    else if (start !== -1 && !isExon) {
+      intervals.push({ gStart: start, gEnd: i });
+      start = -1;
+    }
   }
   return intervals;
 }
@@ -270,11 +282,19 @@ function buildSplicedIndex(intervals, geneSequence, readLength, seedArrays) {
   let seq = "";
   const exonMap = [];
   for (const { gStart, gEnd } of intervals) {
-    exonMap.push({ txStart: seq.length, txEnd: seq.length + (gEnd - gStart), gStart });
+    exonMap.push({
+      txStart: seq.length,
+      txEnd: seq.length + (gEnd - gStart),
+      gStart,
+    });
     seq += geneSequence.slice(gStart, gEnd);
   }
   if (seq.length < readLength) return null;
-  return { txId: "spliced", indices: buildSeedIndices(seq, readLength, seedArrays), exonMap };
+  return {
+    txId: "spliced",
+    indices: buildSeedIndices(seq, readLength, seedArrays),
+    exonMap,
+  };
 }
 
 function buildSeedIndices(geneSequence, readLength, seedArrays) {
@@ -299,6 +319,86 @@ function buildSeedIndices(geneSequence, readLength, seedArrays) {
     }
     return map;
   });
+}
+
+function buildCombinedTxIndex(transcripts, geneSequence, geneInfo, readLength, seedArrays) {
+  const minus = geneInfo?.strand === -1;
+  const toG = (cs, ce) =>
+    minus
+      ? [geneInfo.end - ce, geneInfo.end - cs + 1]
+      : [cs - geneInfo.start, ce - geneInfo.start + 1];
+
+  const indices = seedArrays.map(() => new Map()); // Map<key, Map<txId, txPos[]>>
+  const exonMaps = new Map(); // Map<txId, [{txStart, txEnd, gStart}]>
+
+  for (const t of transcripts) {
+    let seq = "";
+    const exonMap = [];
+    const sortedExons = minus
+      ? [...t.exons].sort((a, b) => b.start - a.start)
+      : [...t.exons].sort((a, b) => a.start - b.start);
+    for (const exon of sortedExons) {
+      const [gStart, gEnd] = toG(exon.start, exon.end);
+      if (gEnd <= gStart || gStart < 0 || gEnd > geneSequence.length) continue;
+      exonMap.push({ txStart: seq.length, txEnd: seq.length + (gEnd - gStart), gStart });
+      seq += geneSequence.slice(gStart, gEnd);
+    }
+    if (seq.length < readLength) continue;
+    exonMaps.set(t.id, exonMap);
+
+    const maxStart = seq.length - readLength;
+    for (let pos = 0; pos <= maxStart; pos++) {
+      for (let s = 0; s < seedArrays.length; s++) {
+        const seed = seedArrays[s];
+        let key = 0, ok = true;
+        for (const idx of seed.positions) {
+          const ch = seq[pos + idx];
+          if (!ch) { ok = false; break; }
+          key = key * 4 + (GENE_BASE_BITS[ch] ?? 0);
+        }
+        if (!ok) continue;
+        let keyMap = indices[s].get(key);
+        if (!keyMap) { keyMap = new Map(); indices[s].set(key, keyMap); }
+        const txPositions = keyMap.get(t.id);
+        if (txPositions) txPositions.push(pos);
+        else keyMap.set(t.id, [pos]);
+      }
+    }
+  }
+  return { indices, exonMaps };
+}
+
+function computeTxIndexStats(indices, exonMaps, transcripts) {
+  const numSeeds = indices.length;
+  const statsMap = new Map();
+  for (const t of transcripts) {
+    const em = exonMaps.get(t.id);
+    const splicedLen = em?.length ? em[em.length - 1].txEnd : 0;
+    statsMap.set(t.id, {
+      txId: t.id,
+      biotype: t.biotype,
+      isCanonical: t.isCanonical,
+      splicedLen,
+      perSeed: Array.from({ length: numSeeds }, () => ({ uniqueKeys: 0, totalPositions: 0, txUniqueKeys: 0 })),
+    });
+  }
+  for (let s = 0; s < numSeeds; s++) {
+    for (const [, txMap] of indices[s]) {
+      const isTxUnique = txMap.size === 1;
+      for (const [txId, positions] of txMap) {
+        const st = statsMap.get(txId);
+        if (st) {
+          st.perSeed[s].uniqueKeys++;
+          st.perSeed[s].totalPositions += positions.length;
+          if (isTxUnique) st.perSeed[s].txUniqueKeys++;
+        }
+      }
+    }
+  }
+  return [...statsMap.values()].map((t) => ({
+    ...t,
+    txUniqueTotalKeys: t.perSeed.reduce((sum, p) => sum + p.txUniqueKeys, 0),
+  }));
 }
 
 // Non-blocking, memory-friendly seed stats collector
@@ -398,7 +498,11 @@ function computeSeedStatsAsync(
 /* ============================================================
    PAIR VALIDATION (module-level, no hooks)
 ============================================================ */
-function buildValidatedPairs(r1MatchMap, r2Matches, { minInsert, maxInsert, rnaMode, readLength }) {
+function buildValidatedPairs(
+  r1MatchMap,
+  r2Matches,
+  { minInsert, maxInsert, rnaMode, readLength },
+) {
   const pairs = [];
   const greyedR1 = [];
   const r2ByIndex = new Map();
@@ -420,12 +524,18 @@ function buildValidatedPairs(r1MatchMap, r2Matches, { minInsert, maxInsert, rnaM
     if (rnaMode) {
       // Pick candidate closest to either end of R1
       const r1Start = r1.position ?? r1.positions?.[0] ?? 0;
-      const r1End   = r1Start + (readLength ?? 100);
+      const r1End = r1Start + (readLength ?? 100);
       best = candidates.reduce((a, b) => {
         const aPos = a.position ?? a.positions?.[0] ?? 0;
         const bPos = b.position ?? b.positions?.[0] ?? 0;
-        const aDist = Math.min(Math.abs(aPos - r1Start), Math.abs(aPos - r1End));
-        const bDist = Math.min(Math.abs(bPos - r1Start), Math.abs(bPos - r1End));
+        const aDist = Math.min(
+          Math.abs(aPos - r1Start),
+          Math.abs(aPos - r1End),
+        );
+        const bDist = Math.min(
+          Math.abs(bPos - r1Start),
+          Math.abs(bPos - r1End),
+        );
         return aDist <= bDist ? a : b;
       });
     } else {
@@ -433,7 +543,9 @@ function buildValidatedPairs(r1MatchMap, r2Matches, { minInsert, maxInsert, rnaM
         const r1Pos = r1.position ?? r1.positions?.[0] ?? 0;
         const r2Pos = r2.position ?? r2.positions?.[0] ?? 0;
         const d = Math.abs(r2Pos - r1Pos);
-        return d >= minInsert && d <= maxInsert && r1.orientation !== r2.orientation;
+        return (
+          d >= minInsert && d <= maxInsert && r1.orientation !== r2.orientation
+        );
       });
     }
 
@@ -460,6 +572,9 @@ export default function FastqGeneFinderApp() {
   const [geneSequence, setGeneSequence] = useState("");
   const [geneInfo, setGeneInfo] = useState(null);
   const [maskedGeneSeq, setMaskedGeneSeq] = useState(null);
+  const [transcripts, setTranscripts] = useState(null);
+  const [txEvidenceCounts, setTxEvidenceCounts] = useState(new Map());
+  const [txIndexStats, setTxIndexStats] = useState(null);
   const txDataRef = useRef([]);
   const [readLength, setReadLength] = useState(null);
   const [seedArrays, setSeedArrays] = useState([]);
@@ -509,12 +624,18 @@ export default function FastqGeneFinderApp() {
 
   const [, setTimerTick] = useState(0);
   const [finalElapsedMs, setFinalElapsedMs] = useState(null);
-  const [r1Stats, setR1Stats] = useState(null);   // frozen after R1 completes
+  const [r1Stats, setR1Stats] = useState(null); // frozen after R1 completes
   const [r2KeptCount, setR2KeptCount] = useState(0);
 
   // Derived insert range from seqMode
   const minInsert = 50;
   const maxInsert = seqMode === "RNA" ? 1_000_000 : 1000;
+
+  const txEvidence = useMemo(() => {
+    if (!txEvidenceCounts.size) return null;
+    const total = Math.max(1, [...txEvidenceCounts.values()].reduce((s, n) => s + n, 0));
+    return new Map([...txEvidenceCounts].map(([id, n]) => [id, { count: n, fraction: n / total }]));
+  }, [txEvidenceCounts]);
 
   useEffect(() => {
     return () => {
@@ -562,10 +683,13 @@ export default function FastqGeneFinderApp() {
   const pileupStep = 25;
   const pileupMinScore = Math.max(
     1,
-    Math.ceil((seedArrays?.length || 1) * pileupThresholdPct / 100),
+    Math.ceil(((seedArrays?.length || 1) * pileupThresholdPct) / 100),
   );
 
-  const pairedMode = !!(r2File && (validatedPairs.length > 0 || greyedR1Reads.length > 0));
+  const pairedMode = !!(
+    r2File &&
+    (validatedPairs.length > 0 || greyedR1Reads.length > 0)
+  );
 
   // Single-end pileup reads (used in non-paired mode and for navigation)
   const singlePileupReads = processingFinished
@@ -574,8 +698,9 @@ export default function FastqGeneFinderApp() {
 
   // For pileup navigation: a flat list of read positions covering all modes
   const pileupReads = pairedMode
-    ? [...validatedPairs.map((p) => p.r1), ...greyedR1Reads]
-        .filter((r) => (r.score ?? 0) >= pileupMinScore)
+    ? [...validatedPairs.map((p) => p.r1), ...greyedR1Reads].filter(
+        (r) => (r.score ?? 0) >= pileupMinScore,
+      )
     : singlePileupReads;
 
   const pileupValidatedPairs = pairedMode
@@ -647,10 +772,13 @@ export default function FastqGeneFinderApp() {
   };
 
   const handleGeneSequenceLoaded = useCallback(
-    (sequence, info, maskedSeq) => {
+    (sequence, info, maskedSeq, newTranscripts) => {
       setGeneSequence(sequence);
       setGeneInfo(info || null);
       setMaskedGeneSeq(maskedSeq ?? null);
+      setTranscripts(newTranscripts ?? null);
+      setTxEvidenceCounts(new Map());
+      setTxIndexStats(null);
       setMatchingReads([]);
       setR2Matches([]);
       setValidatedPairs([]);
@@ -660,20 +788,31 @@ export default function FastqGeneFinderApp() {
       if (readLength) {
         const seeds = generateSeedArrays(readLength);
         setSeedArrays(seeds);
-        // build indices for the newly created seed arrays
         indicesRef.current = buildSeedIndices(sequence, readLength, seeds);
 
-        setSeedStats({ perSeedStats: [], topUniqueSamples: [] }); // reset stats while computing new ones
-        computeSeedStatsAsync(indicesRef.current, seeds).then((stats) => {
-          setSeedStats(stats);
-        });
+        // Build per-transcript combined index (RNA) or merged spliced index (DNA/fallback)
+        if (seqMode === "RNA" && newTranscripts?.length && info) {
+          const txData = buildCombinedTxIndex(newTranscripts, sequence, info, readLength, seeds);
+          txDataRef.current = txData;
+          setTxIndexStats(computeTxIndexStats(txData.indices, txData.exonMaps, newTranscripts));
+        } else if (maskedSeq) {
+          const intervals = extractExonIntervals(maskedSeq);
+          const result = buildSplicedIndex(intervals, sequence, readLength, seeds);
+          txDataRef.current = result ? [result] : [];
+        } else {
+          txDataRef.current = [];
+        }
+
+        setSeedStats({ perSeedStats: [], topUniqueSamples: [] });
+        computeSeedStatsAsync(indicesRef.current, seeds).then(setSeedStats);
         setStatus("ready-to-process");
       } else {
         setSeedArrays([]);
+        txDataRef.current = [];
         setStatus("awaiting-read-length");
       }
     },
-    [readLength],
+    [readLength, seqMode],
   );
 
   const handleGeneLookupFailed = useCallback(() => {
@@ -686,19 +825,9 @@ export default function FastqGeneFinderApp() {
     setValidatedPairs([]);
     setGreyedR1Reads([]);
     txDataRef.current = [];
+    setTxIndexStats(null);
     setStatus(files.length ? "awaiting-gene" : "idle");
   }, [files.length]);
-
-  // Rebuild spliced (exon-union) index whenever masked sequence, gene, or seeds change
-  useEffect(() => {
-    if (maskedGeneSeq && geneSequence && seedArrays?.length) {
-      const intervals = extractExonIntervals(maskedGeneSeq);
-      const result = buildSplicedIndex(intervals, geneSequence, readLength || 100, seedArrays);
-      txDataRef.current = result ? [result] : [];
-    } else {
-      txDataRef.current = [];
-    }
-  }, [maskedGeneSeq, geneSequence, seedArrays, readLength]);
 
   /* ---------------- File selection ---------------- */
   const initR1File = useCallback((file) => {
@@ -772,6 +901,7 @@ export default function FastqGeneFinderApp() {
     setR2Matches([]);
     setValidatedPairs([]);
     setGreyedR1Reads([]);
+    setTxEvidenceCounts(new Map());
     r1MatchMapRef.current = null;
     setR1Stats(null);
     setR2KeptCount(0);
@@ -797,7 +927,7 @@ export default function FastqGeneFinderApp() {
     const seedIndices = indicesRef.current;
     const minSeedMatches = Math.max(
       1,
-      Math.ceil((seedArrays?.length || 1) * matchThresholdPct / 100),
+      Math.ceil(((seedArrays?.length || 1) * matchThresholdPct) / 100),
     );
     const actualWorkerCount = Math.max(1, workerCount);
 
@@ -933,6 +1063,20 @@ export default function FastqGeneFinderApp() {
           if (matches.length > 0) {
             workerMatchFound[i] += matches.length;
             pendingMatchesRef.current.push(...matches);
+            // Accumulate per-transcript evidence from spliced matches
+            const updates = new Map();
+            for (const m of matches) {
+              for (const { txId } of (m.txEvidence || [])) {
+                updates.set(txId, (updates.get(txId) || 0) + 1);
+              }
+            }
+            if (updates.size > 0) {
+              setTxEvidenceCounts((prev) => {
+                const next = new Map(prev);
+                for (const [txId, n] of updates) next.set(txId, (next.get(txId) || 0) + n);
+                return next;
+              });
+            }
           }
           syncWorkerDisplay();
           syncMatchDisplay();
@@ -968,7 +1112,12 @@ export default function FastqGeneFinderApp() {
     workers.forEach((w) =>
       w.postMessage({
         type: "init",
-        payload: { seedArrays, seedIndices, minSeedMatches, txData: txDataRef.current },
+        payload: {
+          seedArrays,
+          seedIndices,
+          minSeedMatches,
+          txData: txDataRef.current,
+        },
       }),
     );
     await allReadyPromise;
@@ -1003,7 +1152,15 @@ export default function FastqGeneFinderApp() {
 
     flushFinalBatch();
     checkDone();
-  }, [files, geneSequence, seedArrays, readLength, workerCount, matchThresholdPct, r2File]);
+  }, [
+    files,
+    geneSequence,
+    seedArrays,
+    readLength,
+    workerCount,
+    matchThresholdPct,
+    r2File,
+  ]);
 
   /* ---------------- R2 pass (triggered after R1 completes with r2File set) ---------------- */
   const runR2Pass = useCallback(async () => {
@@ -1014,9 +1171,9 @@ export default function FastqGeneFinderApp() {
     setProgress({ done: 0, total: 0, fileName: r2File.name });
     setR2KeptCount(0);
     setFinalElapsedMs(null);
-    startTimeRef.current    = Date.now();
+    startTimeRef.current = Date.now();
     pauseStartTimeRef.current = null;
-    totalPausedMsRef.current  = 0;
+    totalPausedMsRef.current = 0;
     pauseRef.current = false;
 
     batchesDispatchedRef.current = 0;
@@ -1040,7 +1197,7 @@ export default function FastqGeneFinderApp() {
     const seedIndices = indicesRef.current;
     const minSeedMatches = Math.max(
       1,
-      Math.ceil((seedArrays.length || 1) * matchThresholdPct / 100),
+      Math.ceil(((seedArrays.length || 1) * matchThresholdPct) / 100),
     );
     const actualWorkerCount = Math.max(1, workerCount);
 
@@ -1057,11 +1214,17 @@ export default function FastqGeneFinderApp() {
       const reads = pendingBatchRef.current.shift();
       const batchId = nextBatchIdRef.current++;
       batchesDispatchedRef.current++;
-      workers[workerIdx].postMessage({ type: "batch", payload: { batchId, reads } });
+      workers[workerIdx].postMessage({
+        type: "batch",
+        payload: { batchId, reads },
+      });
     };
 
     const drainPendingBatches = () => {
-      while (pendingBatchRef.current.length > 0 && idleWorkersRef.current.length > 0) {
+      while (
+        pendingBatchRef.current.length > 0 &&
+        idleWorkersRef.current.length > 0
+      ) {
         const workerIdx = idleWorkersRef.current.shift();
         dispatchBatch(workerIdx);
       }
@@ -1081,20 +1244,18 @@ export default function FastqGeneFinderApp() {
       ) {
         workersRef.current.forEach((w) => w.terminate());
         workersRef.current = [];
-        setFinalElapsedMs(startTimeRef.current != null ? Date.now() - startTimeRef.current : 0);
+        setFinalElapsedMs(
+          startTimeRef.current != null ? Date.now() - startTimeRef.current : 0,
+        );
         setR2KeptCount(r2Accumulated.length);
 
         // Run pairing validation
-        const { pairs, greyedR1 } = buildValidatedPairs(
-          r2Map,
-          r2Accumulated,
-          {
-            minInsert: currentMinInsert,
-            maxInsert: currentMaxInsert,
-            rnaMode: currentSeqMode === "RNA",
-            readLength: currentReadLength,
-          },
-        );
+        const { pairs, greyedR1 } = buildValidatedPairs(r2Map, r2Accumulated, {
+          minInsert: currentMinInsert,
+          maxInsert: currentMaxInsert,
+          rnaMode: currentSeqMode === "RNA",
+          readLength: currentReadLength,
+        });
 
         setR2Matches(r2Accumulated.slice());
         setValidatedPairs(pairs);
@@ -1106,7 +1267,9 @@ export default function FastqGeneFinderApp() {
 
     let readyCount = 0;
     let resolveAllReady;
-    const allReadyPromise = new Promise((res) => { resolveAllReady = res; });
+    const allReadyPromise = new Promise((res) => {
+      resolveAllReady = res;
+    });
 
     workers.forEach((w, i) => {
       w.onmessage = ({ data }) => {
@@ -1143,7 +1306,12 @@ export default function FastqGeneFinderApp() {
     workers.forEach((w) =>
       w.postMessage({
         type: "init",
-        payload: { seedArrays, seedIndices, minSeedMatches, txData: txDataRef.current },
+        payload: {
+          seedArrays,
+          seedIndices,
+          minSeedMatches,
+          txData: txDataRef.current,
+        },
       }),
     );
     await allReadyPromise;
@@ -1162,7 +1330,8 @@ export default function FastqGeneFinderApp() {
       },
       pauseRef,
       abortRef,
-      onProgress: (done, total, fileName) => setProgress({ done, total, fileName }),
+      onProgress: (done, total, fileName) =>
+        setProgress({ done, total, fileName }),
       tick,
     });
 
@@ -1176,28 +1345,41 @@ export default function FastqGeneFinderApp() {
     }
     drainPendingBatches();
     checkDoneR2();
-  }, [r2File, seedArrays, workerCount, matchThresholdPct, seqMode, readLength, minInsert, maxInsert]);
+  }, [
+    r2File,
+    seedArrays,
+    workerCount,
+    matchThresholdPct,
+    seqMode,
+    readLength,
+    minInsert,
+    maxInsert,
+  ]);
 
   // Trigger R2 pass when R1 completes with an R2 file set.
   // matchingReads is final at this point — R1's checkDone() called syncMatchDisplay(true)
   // then setStatus("done-r1") in the same React batch, so this effect sees the final matches.
   useEffect(() => {
     if (status !== "done-r1") return;
-    if (!r2File) { setStatus("done"); return; }
+    if (!r2File) {
+      setStatus("done");
+      return;
+    }
 
     // Freeze R1 stats for comparison display
     const r1TotalReads = totalReadsRef.current;
-    const r1Kept       = matchingReads.length;
+    const r1Kept = matchingReads.length;
     setR1Stats({
-      fileName:      progress.fileName,
-      fileSizeDone:  progress.done,
+      fileName: progress.fileName,
+      fileSizeDone: progress.done,
       fileSizeTotal: progress.total,
-      totalReads:    r1TotalReads,
-      keptCount:     r1Kept,
-      elapsedMs:     finalElapsedMs ?? 0,
-      readsPerSec:   r1TotalReads > 0 && (finalElapsedMs ?? 0) > 0
-        ? Math.round(r1TotalReads / ((finalElapsedMs ?? 1) / 1000))
-        : null,
+      totalReads: r1TotalReads,
+      keptCount: r1Kept,
+      elapsedMs: finalElapsedMs ?? 0,
+      readsPerSec:
+        r1TotalReads > 0 && (finalElapsedMs ?? 0) > 0
+          ? Math.round(r1TotalReads / ((finalElapsedMs ?? 1) / 1000))
+          : null,
     });
 
     // Sort R1 matches by FASTQ line number (workers finish out of order)
@@ -1206,7 +1388,9 @@ export default function FastqGeneFinderApp() {
     );
     r1MatchMapRef.current = new Map(sorted.map((m) => [m.index, m]));
 
-    setTimeout(() => { runR2Pass(); }, 0);
+    setTimeout(() => {
+      runR2Pass();
+    }, 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status]);
 
@@ -1279,16 +1463,20 @@ export default function FastqGeneFinderApp() {
 
   function handleExportSeeds() {
     if (!seedArrays.length) return;
-    const maxPos = Math.max(...seedArrays.map(s => s.positions.length));
-    const header = ["seedId", "label", ...Array.from({ length: maxPos }, (_, i) => `pos${i}`)].join(",");
-    const rows   = seedArrays.map(s =>
-      [s.id, s.label, ...s.positions].join(",")
+    const maxPos = Math.max(...seedArrays.map((s) => s.positions.length));
+    const header = [
+      "seedId",
+      "label",
+      ...Array.from({ length: maxPos }, (_, i) => `pos${i}`),
+    ].join(",");
+    const rows = seedArrays.map((s) =>
+      [s.id, s.label, ...s.positions].join(","),
     );
-    const csv  = [header, ...rows].join("\n");
+    const csv = [header, ...rows].join("\n");
     const blob = new Blob([csv], { type: "text/csv" });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
-    a.href     = url;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
     a.download = `seeds-${geneName || "gene"}-${Date.now()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
@@ -1308,9 +1496,10 @@ export default function FastqGeneFinderApp() {
         matchingReads,
         validatedPairs,
         greyedR1Reads,
-        coverageDataUrl:    coverageRef.current?.getCanvasDataUrl() ?? null,
+        coverageDataUrl: coverageRef.current?.getCanvasDataUrl() ?? null,
         coverageDimensions: coverageRef.current?.getCanvasDimensions() ?? null,
-        coverageTranscripts: coverageRef.current?.getTranscripts() ?? null,
+        coverageTranscripts: transcripts,
+        txEvidence,
         readLength: readLength || 100,
         fileName: files[0]?.name || "",
       });
@@ -1350,7 +1539,15 @@ export default function FastqGeneFinderApp() {
         }}
       >
         {/* Left column: R1 drop zone + mode selector + R2 drop zone */}
-        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+        <div
+          style={{
+            flex: 1,
+            minWidth: 0,
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.5rem",
+          }}
+        >
           <DropZone
             onFilesSelected={handleFilesSelected}
             accept={dropzoneAccept}
@@ -1361,7 +1558,15 @@ export default function FastqGeneFinderApp() {
               readLength ? [{ label: "Read Length", value: readLength }] : []
             }
           />
-          <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "12px", fontFamily: "monospace" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.5rem",
+              fontSize: "12px",
+              fontFamily: "monospace",
+            }}
+          >
             <label>
               Mode:
               <select
@@ -1375,7 +1580,9 @@ export default function FastqGeneFinderApp() {
               </select>
             </label>
             <span style={{ color: "#888" }}>
-              {seqMode === "RNA" ? "insert ≤ 1 Mbp" : `insert ${minInsert}–${maxInsert} bp`}
+              {seqMode === "RNA"
+                ? "insert ≤ 1 Mbp"
+                : `insert ${minInsert}–${maxInsert} bp`}
             </span>
           </div>
           <DropZone
@@ -1438,7 +1645,12 @@ export default function FastqGeneFinderApp() {
           {seedArrays.length > 0 && (
             <button
               onClick={handleExportSeeds}
-              style={{ fontSize: "11px", padding: "2px 8px", marginBottom: "0.5rem", cursor: "pointer" }}
+              style={{
+                fontSize: "11px",
+                padding: "2px 8px",
+                marginBottom: "0.5rem",
+                cursor: "pointer",
+              }}
             >
               Export Seeds CSV
             </button>
@@ -1455,6 +1667,7 @@ export default function FastqGeneFinderApp() {
             <PerSeedSummaryPanel seedStats={seedStats} />
             <MostUniquesPanel seedStats={seedStats} />
           </div>
+          <TxSeedIndexPanel txIndexStats={txIndexStats} seedArrays={seedArrays} />
         </div>
       )}
 
@@ -1482,7 +1695,10 @@ export default function FastqGeneFinderApp() {
       {/* Tab: Pileup */}
       {activeTab === "pileup" && (
         <div style={{ marginTop: "1rem" }}>
-          {!processingFinished || (matchingReads.length === 0 && validatedPairs.length === 0 && greyedR1Reads.length === 0) ? (
+          {!processingFinished ||
+          (matchingReads.length === 0 &&
+            validatedPairs.length === 0 &&
+            greyedR1Reads.length === 0) ? (
             <div style={{ color: "#888", fontFamily: "monospace" }}>
               No matches yet — run processing first.
             </div>
@@ -1499,6 +1715,8 @@ export default function FastqGeneFinderApp() {
                 geneInfo={geneInfo}
                 onExportPdf={handleExportPdf}
                 isPdfExporting={isPdfExporting}
+                transcripts={transcripts}
+                txEvidence={txEvidence}
               />
               <div
                 style={{
@@ -1551,27 +1769,56 @@ export default function FastqGeneFinderApp() {
                   </select>
                 </label>
               </div>
-              <div style={{ ...Styles.smallMargin, display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
-                <label style={{ fontSize: "12px", display: "flex", alignItems: "center", gap: "0.25rem" }}>
+              <div
+                style={{
+                  ...Styles.smallMargin,
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.4rem",
+                  flexWrap: "wrap",
+                }}
+              >
+                <label
+                  style={{
+                    fontSize: "12px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "0.25rem",
+                  }}
+                >
                   Pileup %:
                   <select
                     value={pileupThresholdPct}
-                    onChange={(e) => setPileupThresholdPct(Number(e.target.value))}
+                    onChange={(e) =>
+                      setPileupThresholdPct(Number(e.target.value))
+                    }
                     style={{ fontSize: "11px" }}
                   >
                     {[30, 40, 50, 60, 70, 80, 90, 100].map((v) => (
                       <option key={v} value={v}>
-                        {v}% ({Math.max(1, Math.ceil((seedArrays?.length || 1) * v / 100))} seeds)
+                        {v}% (
+                        {Math.max(
+                          1,
+                          Math.ceil(((seedArrays?.length || 1) * v) / 100),
+                        )}{" "}
+                        seeds)
                       </option>
                     ))}
                   </select>
                 </label>
                 <span style={{ fontSize: "12px" }}>
-                  — showing {pileupReads.length} reads. Window starts at {pileupWindowStart}.
+                  — showing {pileupReads.length} reads. Window starts at{" "}
+                  {pileupWindowStart}.
                 </span>
                 {pairedMode && (
-                  <span style={{ fontSize: "12px", color: Styles.pairConnectorColor }}>
-                    {validatedPairs.length} paired, {greyedR1Reads.length} unconfirmed
+                  <span
+                    style={{
+                      fontSize: "12px",
+                      color: Styles.pairConnectorColor,
+                    }}
+                  >
+                    {validatedPairs.length} paired, {greyedR1Reads.length}{" "}
+                    unconfirmed
                   </span>
                 )}
               </div>

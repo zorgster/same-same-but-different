@@ -5,9 +5,30 @@ import {
   downloadTestFastq,
 } from "./gene-test-data.js";
 
+function parseTranscripts(rawList) {
+  const sorted = [...rawList].sort((a, b) => {
+    if ((b.is_canonical ?? 0) !== (a.is_canonical ?? 0)) return (b.is_canonical ?? 0) - (a.is_canonical ?? 0);
+    if ((a.biotype === "protein_coding") !== (b.biotype === "protein_coding"))
+      return a.biotype === "protein_coding" ? -1 : 1;
+    return (a.id || "").localeCompare(b.id || "");
+  });
+  return sorted.map((t) => ({
+    id: t.id,
+    biotype: t.biotype || "",
+    isCanonical: t.is_canonical === 1,
+    start: t.start,
+    end: t.end,
+    exons: (Array.isArray(t.Exon) ? t.Exon : []).map((e) => ({
+      id: e.id,
+      start: e.start,
+      end: e.end,
+    })),
+  }));
+}
+
 async function fetchGeneSequence(geneName) {
   const lookup = await fetch(
-    `https://rest.ensembl.org/lookup/symbol/homo_sapiens/${encodeURIComponent(geneName)}?content-type=application/json`,
+    `https://rest.ensembl.org/lookup/symbol/homo_sapiens/${encodeURIComponent(geneName)}?content-type=application/json&expand=1`,
   );
   if (!lookup.ok) throw new Error("Gene lookup failed");
   const lookupJson = await lookup.json();
@@ -18,7 +39,8 @@ async function fetchGeneSequence(geneName) {
   if (!seqRes.ok) throw new Error("Sequence fetch failed");
   const seqJson = await seqRes.json();
 
-  return { seq: seqJson.seq.toUpperCase(), maskedSeq: seqJson.seq, lookupJson };
+  const transcripts = parseTranscripts(Array.isArray(lookupJson.Transcript) ? lookupJson.Transcript : []);
+  return { seq: seqJson.seq.toUpperCase(), maskedSeq: seqJson.seq, lookupJson, transcripts };
 }
 
 const secondaryBtn = {
@@ -42,7 +64,7 @@ export default function GeneLookupWidget({
     setLoading(true);
     setError("");
     try {
-      const { seq, maskedSeq, lookupJson } = await fetchGeneSequence(geneName);
+      const { seq, maskedSeq, lookupJson, transcripts } = await fetchGeneSequence(geneName);
       setLookupInfo({
         displayName: lookupJson.display_name || geneName,
         id: lookupJson.id,
@@ -64,7 +86,9 @@ export default function GeneLookupWidget({
         end: lookupJson.end,
         strand: lookupJson.strand,
         assembly: lookupJson.assembly_name,
-      }, maskedSeq);
+        displayName: lookupJson.display_name || geneName,
+        version: lookupJson.version,
+      }, maskedSeq, transcripts);
     } catch (e) {
       setError(String(e));
       setLookupInfo(null);

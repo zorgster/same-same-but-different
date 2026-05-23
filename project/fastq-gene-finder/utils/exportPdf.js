@@ -61,16 +61,16 @@ function extractExonIntervals(maskedSeq) {
 // Build a compressed x-coordinate mapping.
 // Exon regions render at exonPxPerBp px/bp (minimum minExonPx); introns collapse to intronPx px each.
 // Returns { scale(genePos) => canvasX, totalWidth, breaks, exonW(b) }
-function buildCompressedScale(exonIntervals, exonPxPerBp, intronPx, minExonPx = 4) {
-  const MARGIN = 12;
+function buildCompressedScale(exonIntervals, exonPxPerBp, intronPx, minExonPx = 4, leftMargin = 12) {
+  const RIGHT_MARGIN = 12;
   const exonW  = (e) => Math.max(minExonPx, (e.gEnd - e.gStart) * exonPxPerBp);
   const breaks = [];
-  let cx = MARGIN + intronPx; // leading intron space
+  let cx = leftMargin + intronPx; // leading intron space
   for (const e of exonIntervals) {
     breaks.push({ gStart: e.gStart, gEnd: e.gEnd, canvasX: cx });
     cx += exonW(e) + intronPx;
   }
-  const totalWidth = cx + MARGIN;
+  const totalWidth = cx + RIGHT_MARGIN;
 
   function scale(genePos) {
     for (let i = 0; i < breaks.length; i++) {
@@ -78,7 +78,7 @@ function buildCompressedScale(exonIntervals, exonPxPerBp, intronPx, minExonPx = 
       if (genePos < b.gStart) {
         const prevEnd       = i === 0 ? 0 : breaks[i - 1].gEnd;
         const prevCanvasEnd = i === 0
-          ? MARGIN
+          ? leftMargin
           : breaks[i - 1].canvasX + exonW(breaks[i - 1]);
         const intronLen = b.gStart - prevEnd;
         const progress  = intronLen > 0 ? (genePos - prevEnd) / intronLen : 0;
@@ -110,10 +110,28 @@ function computeCoverage(matchingReads, geneLen, readLength) {
   return cov;
 }
 
+// Evidence-based colour tiers — mirrors CoverageOverview.jsx txColors()
+function txColorsPdf(t, txEvidence) {
+  const ev = txEvidence?.get(t.id);
+  if (!ev) {
+    return {
+      backbone: t.isCanonical ? COLORS.accent : COLORS.border,
+      lw: t.isCanonical ? 1.5 : 0.5,
+      exonCovered: t.isCanonical ? COLORS.accent : COLORS.muted + "55",
+      exonUncovered: COLORS.muted + "22",
+    };
+  }
+  const f = ev.fraction;
+  if (f >= 0.5)  return { backbone: COLORS.accent,  lw: 1.5, exonCovered: COLORS.accent,       exonUncovered: COLORS.muted + "55" };
+  if (f >= 0.2)  return { backbone: "#5a9a5a",       lw: 1,   exonCovered: COLORS.success,      exonUncovered: COLORS.muted + "55" };
+  if (f >= 0.01) return { backbone: COLORS.muted,    lw: 1,   exonCovered: COLORS.muted + "88", exonUncovered: COLORS.muted + "33" };
+  return           { backbone: COLORS.border,  lw: 0.5, exonCovered: COLORS.muted + "55", exonUncovered: COLORS.muted + "22" };
+}
+
 // ── RNA overview canvas (compressed introns) ─────────────────────────────────
 function renderRnaOverviewCanvas({
   geneSequence, maskedGeneSeq, matchingReads, validatedPairs, greyedR1Reads,
-  geneInfo, transcripts, readLength,
+  geneInfo, transcripts, txEvidence, readLength,
 }) {
   const geneLen = geneSequence.length;
   // Prefer transcript exon boundaries (authoritative); fall back to sequence masking
@@ -124,21 +142,90 @@ function renderRnaOverviewCanvas({
 
   const totalExonBp = exonIntervals.reduce((s, e) => s + (e.gEnd - e.gStart), 0);
   const exonPxPerBp = Math.max(0.5, Math.min(8, 1600 / Math.max(1, totalExonBp)));
-  const INTRON_PX   = 30;
-  const MIN_EXON_PX = 20;   // ensure even tiny exons are clearly visible
-  const { scale, totalWidth, breaks, exonW } = buildCompressedScale(exonIntervals, exonPxPerBp, INTRON_PX, MIN_EXON_PX);
+  const INTRON_PX    = 30;
+  const MIN_EXON_PX  = 20;   // ensure even tiny exons are clearly visible
+  const LEFT_LABEL_W = 130;  // px reserved for transcript ID + evidence label
+  const { scale, totalWidth, breaks, exonW } = buildCompressedScale(exonIntervals, exonPxPerBp, INTRON_PX, MIN_EXON_PX, LEFT_LABEL_W);
 
-  // Layout
+  // Layout constants
   const LABEL_H  = 18;
   const COV_H    = 50;
   const GAP      = 4;
-  const TX_ROW_H = 11;
-  const TX_GAP   = 2;
-  const STRIP_H  = 120;
+  const TX_ROW_H = 16;
+  const TX_GAP   = 3;
+  const ROW_H    = 5;
+  const ROW_GAP  = 2;
 
-  const numTx       = transcripts?.length ?? 0;
-  const txBlockH    = numTx > 0 ? (14 + numTx * (TX_ROW_H + TX_GAP) + GAP) : 0;
-  const canvasH     = LABEL_H + COV_H + GAP + txBlockH + GAP + STRIP_H + 4;
+  const numTx    = transcripts?.length ?? 0;
+  const txBlockH = numTx > 0 ? (14 + numTx * (TX_ROW_H + TX_GAP) + GAP) : 0;
+
+  // Pre-placement pass — determine row assignments before canvas creation.
+  // Overview caps at MAX_ROWS so the strip stays a manageable height (reads across
+  // collapsed introns can reserve very wide spans, requiring many rows).
+  const MAX_ROWS  = 40;
+  const rowRanges = [];
+  const placeAt = (xStart, xEnd) => {
+    const w = Math.max(2, xEnd - xStart);
+    for (let r = 0; r < rowRanges.length; r++) {
+      if (!rowRanges[r].some(([a, b]) => xStart < b && xStart + w > a)) {
+        rowRanges[r].push([xStart, xStart + w]);
+        return r;
+      }
+    }
+    if (rowRanges.length < MAX_ROWS) {
+      rowRanges.push([[xStart, xStart + w]]);
+      return rowRanges.length - 1;
+    }
+    return -1; // row full — skip this read in the draw pass
+  };
+
+  const pairPlans = [];
+  for (const p of (validatedPairs || [])) {
+    const { r1, r2 } = p;
+    const r1Pos = r1?.position ?? r1?.positions?.[0];
+    const r2Pos = r2?.position ?? r2?.positions?.[0];
+    if (r1Pos == null || r2Pos == null) continue;
+    const x1s = scale(r1Pos);
+    const x1e = scale(r1Pos + (r1.read?.length ?? readLength));
+    const x2s = scale(r2Pos);
+    const x2e = scale(r2Pos + (r2.read?.length ?? readLength));
+    const row  = placeAt(Math.min(x1s, x2s), Math.max(x1e, x2e));
+    const [lEnd, rStart] = x1e < x2s ? [x1e, x2s] : [x2e, x1s];
+    pairPlans.push({
+      row, x1s, x1e, x2s, x2e,
+      c1: r1.orientation === "forward" ? FORWARD_COLOR : REVERSE_COLOR,
+      c2: r2.orientation === "forward" ? FORWARD_COLOR : REVERSE_COLOR,
+      hasInsert: rStart > lEnd, lEnd, rStart,
+    });
+  }
+
+  const singlePlans = [];
+  for (const { r, grey } of [
+    ...(matchingReads || []).map(r => ({ r, grey: false })),
+    ...(greyedR1Reads || []).map(r => ({ r, grey: true })),
+  ]) {
+    const color = grey ? "#cccccc" : (r.orientation === "forward" ? FORWARD_COLOR : REVERSE_COLOR);
+    if (r.junctions?.length) {
+      const firstJ = r.junctions[0];
+      const lastJ  = r.junctions[r.junctions.length - 1];
+      const row    = placeAt(scale(firstJ.gStart), scale(lastJ.gStart + (lastJ.readEnd - lastJ.readStart)));
+      const segs   = r.junctions.map((j, i) => ({
+        jX1: scale(j.gStart),
+        jX2: scale(j.gStart + (j.readEnd - j.readStart)),
+        arcTo: i + 1 < r.junctions.length ? scale(r.junctions[i + 1].gStart) : null,
+      }));
+      singlePlans.push({ type: "junction", row, color, grey, segs });
+    } else {
+      const pos = r.position ?? r.positions?.[0];
+      if (pos == null) continue;
+      const xS = scale(pos);
+      const xE = scale(pos + (r.read?.length ?? readLength));
+      singlePlans.push({ type: "simple", row: placeAt(xS, xE), color, grey, xS, xE });
+    }
+  }
+
+  const STRIP_H = Math.max(1, rowRanges.length) * (ROW_H + ROW_GAP) + 4;
+  const canvasH = LABEL_H + COV_H + GAP + txBlockH + GAP + STRIP_H + 4;
 
   // 2× scale for crisp PDF embedding (same logical coordinates, double physical pixels)
   const SCALE = 2;
@@ -173,10 +260,18 @@ function renderRnaOverviewCanvas({
     }
   }
 
-  // Also leading intron band
-  if (breaks.length && breaks[0].canvasX > 12) {
+  // Separator line between label column and exon diagram
+  ctx.strokeStyle = "#dddddd";
+  ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(LEFT_LABEL_W, LABEL_H);
+  ctx.lineTo(LEFT_LABEL_W, canvasH);
+  ctx.stroke();
+
+  // Leading intron band (between label column edge and first exon)
+  if (breaks.length && breaks[0].canvasX > LEFT_LABEL_W) {
     ctx.fillStyle = INTRON_BG;
-    ctx.fillRect(12, LABEL_H, breaks[0].canvasX - 12, canvasH - LABEL_H);
+    ctx.fillRect(LEFT_LABEL_W, LABEL_H, breaks[0].canvasX - LEFT_LABEL_W, canvasH - LABEL_H);
   }
 
   // Coordinate labels (one per exon)
@@ -240,8 +335,19 @@ function renderRnaOverviewCanvas({
   ctx.textBaseline = "top";
   ctx.fillText(`max ${maxCov}`, 2, covY + 2);
 
-  // Transcript rows
+  // Transcript rows — sorted by evidence fraction desc then canonical/biotype/id
   if (transcripts?.length && geneInfo) {
+    const sortedTx = [...transcripts].sort((a, b) => {
+      const fa = txEvidence?.get(a.id)?.fraction ?? -1;
+      const fb = txEvidence?.get(b.id)?.fraction ?? -1;
+      if (fb !== fa) return fb - fa;
+      if (b.isCanonical !== a.isCanonical) return (b.isCanonical ? 1 : 0) - (a.isCanonical ? 1 : 0);
+      const aPC = a.biotype === "protein_coding" ? 1 : 0;
+      const bPC = b.biotype === "protein_coding" ? 1 : 0;
+      if (bPC !== aPC) return bPC - aPC;
+      return (a.id || "").localeCompare(b.id || "");
+    });
+
     const txY = covY + COV_H + GAP;
     ctx.fillStyle = "#888";
     ctx.font = "9px monospace";
@@ -261,14 +367,36 @@ function renderRnaOverviewCanvas({
       return sum / Math.max(1, e - s) >= 0.5;
     };
 
-    for (let ti = 0; ti < transcripts.length; ti++) {
-      const t    = transcripts[ti];
-      const rowY = txStartY + ti * (TX_ROW_H + TX_GAP);
-      const midY = rowY + TX_ROW_H / 2;
+    for (let ti = 0; ti < sortedTx.length; ti++) {
+      const t      = sortedTx[ti];
+      const colors = txColorsPdf(t, txEvidence);
+      const rowY   = txStartY + ti * (TX_ROW_H + TX_GAP);
+      const midY   = rowY + TX_ROW_H / 2;
+
+      // Two-line label in left column
+      const ev = txEvidence?.get(t.id);
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(2, rowY, LEFT_LABEL_W - 4, TX_ROW_H);
+      ctx.clip();
+      ctx.textAlign = "left";
+      // Line 1: transcript ID
+      ctx.font = "8px monospace";
+      ctx.textBaseline = "top";
+      ctx.fillStyle = colors.backbone;
+      ctx.fillText(t.id, 2, rowY + 1);
+      // Line 2: evidence (grey, smaller)
+      ctx.font = "7px monospace";
+      ctx.fillStyle = "#888888";
+      const evLine = ev
+        ? `${Math.round(ev.fraction * 100)}%  ${ev.count} spliced reads`
+        : t.isCanonical ? "canonical" : "";
+      if (evLine) ctx.fillText(evLine, 2, rowY + 9);
+      ctx.restore();
 
       const [tGS, tGE] = toG(t.start, t.end);
-      ctx.strokeStyle = t.isCanonical ? COLORS.accent : COLORS.border;
-      ctx.lineWidth   = t.isCanonical ? 1.5 : 1;
+      ctx.strokeStyle = colors.backbone;
+      ctx.lineWidth   = colors.lw;
       ctx.beginPath();
       ctx.moveTo(scale(Math.max(0, tGS)), midY);
       ctx.lineTo(scale(Math.min(geneLen, tGE)), midY);
@@ -280,23 +408,156 @@ function renderRnaOverviewCanvas({
         const ex1 = scale(Math.max(0, eGS));
         const ex2 = scale(Math.min(geneLen, eGE));
         const covered = regionCoveredByCov(eGS, eGE);
-        ctx.fillStyle = covered
-          ? (t.isCanonical ? COLORS.accent : COLORS.success)
-          : (COLORS.muted + "55");
+        ctx.fillStyle = covered ? colors.exonCovered : colors.exonUncovered;
         ctx.fillRect(ex1, rowY, Math.max(2, ex2 - ex1), TX_ROW_H);
       }
     }
   }
 
-  // Read density strip
+  // Read density strip — draw from pre-computed placements (no row cap)
   const txBlockUsed = numTx > 0 ? COV_H + GAP + txBlockH + GAP : COV_H + GAP * 2;
   const stripY      = LABEL_H + txBlockUsed;
-  const ROW_H       = 5;
-  const ROW_GAP     = 2;
-  const MAX_ROWS    = Math.floor(STRIP_H / (ROW_H + ROW_GAP));
-  const rowRanges   = [];
 
-  function placeAt(xStart, xEnd) {
+  const drawRead = (xStart, xEnd, color, row, alpha) => {
+    const ry = stripY + row * (ROW_H + ROW_GAP);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle   = color;
+    ctx.fillRect(xStart, ry, Math.max(2, xEnd - xStart), ROW_H);
+    ctx.globalAlpha = 1;
+    return ry;
+  };
+
+  for (const plan of pairPlans) {
+    if (plan.row < 0) continue;
+    const ry = drawRead(plan.x1s, plan.x1e, plan.c1, plan.row, 0.75);
+    drawRead(plan.x2s, plan.x2e, plan.c2, plan.row, 0.75);
+    if (plan.hasInsert) {
+      ctx.globalAlpha = 0.7;
+      ctx.setLineDash([3, 3]);
+      ctx.strokeStyle = "#888888";
+      ctx.lineWidth   = 1;
+      ctx.beginPath(); ctx.moveTo(plan.lEnd, ry + ROW_H / 2); ctx.lineTo(plan.rStart, ry + ROW_H / 2); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  for (const plan of singlePlans) {
+    if (plan.row < 0) continue;
+    const ry = stripY + plan.row * (ROW_H + ROW_GAP);
+    if (plan.type === "junction") {
+      for (const seg of plan.segs) {
+        drawRead(seg.jX1, seg.jX2, plan.color, plan.row, plan.grey ? 0.4 : 0.9);
+        if (seg.arcTo != null) {
+          ctx.globalAlpha = plan.grey ? 0.4 : 1.0;
+          ctx.strokeStyle = plan.color;
+          ctx.lineWidth   = 1.5;
+          ctx.beginPath(); ctx.moveTo(seg.jX2, ry + ROW_H / 2); ctx.lineTo(seg.arcTo, ry + ROW_H / 2); ctx.stroke();
+          ctx.globalAlpha = 1;
+        }
+      }
+    } else {
+      drawRead(plan.xS, plan.xE, plan.color, plan.row, plan.grey ? 0.4 : 0.75);
+    }
+  }
+
+  // Exon boundary tick marks
+  ctx.strokeStyle = "#cccccc";
+  ctx.lineWidth   = 0.5;
+  for (const b of breaks) {
+    const x1 = b.canvasX;
+    const x2 = b.canvasX + exonW(b);
+    for (const x of [x1, x2]) {
+      ctx.beginPath(); ctx.moveTo(x, LABEL_H); ctx.lineTo(x, canvasH); ctx.stroke();
+    }
+  }
+
+  return canvas;
+}
+
+// ── Per-transcript helpers ────────────────────────────────────────────────────
+
+function getReadsForTranscript(t, geneInfo, matchingReads, validatedPairs, readLength) {
+  const minus = geneInfo?.strand === -1;
+  const toG = (cs, ce) => minus
+    ? [geneInfo.end - ce, geneInfo.end - cs + 1]
+    : [cs - geneInfo.start, ce - geneInfo.start + 1];
+
+  const txExons = (t.exons || []).map(e => {
+    const [gs, ge] = toG(e.start, e.end);
+    return { gs, ge };
+  }).filter(e => e.ge > e.gs && e.gs >= 0);
+
+  const overlapsExon = (pos, len) => {
+    const end = pos + len;
+    return txExons.some(e => pos < e.ge && end > e.gs);
+  };
+
+  const txReads = (matchingReads || []).filter(r => {
+    const pos = r.position ?? r.positions?.[0];
+    if (pos == null) return false;
+
+    if (r.junctions?.length > 1) {
+      // Spliced read: each implied intron (gap between consecutive segments) must not
+      // overlap any exon of this transcript — if it does, the read splices across exon
+      // content and cannot support this transcript.
+      for (let i = 0; i + 1 < r.junctions.length; i++) {
+        const j     = r.junctions[i];
+        const jNext = r.junctions[i + 1];
+        const intronStart = j.gStart + (j.readEnd - j.readStart);
+        const intronEnd   = jNext.gStart;
+        if (intronEnd > intronStart && txExons.some(e => intronStart < e.ge && intronEnd > e.gs))
+          return false;
+      }
+      return r.junctions.some(j => overlapsExon(j.gStart, j.readEnd - j.readStart));
+    }
+
+    if (overlapsExon(pos, r.read?.length ?? readLength)) return true;
+    return r.junctions?.some(j => overlapsExon(j.gStart, j.readEnd - j.readStart)) ?? false;
+  });
+
+  const txPairs = (validatedPairs || []).filter(p => {
+    const r1Pos = p.r1?.position ?? p.r1?.positions?.[0];
+    const r2Pos = p.r2?.position ?? p.r2?.positions?.[0];
+    return (r1Pos != null && overlapsExon(r1Pos, p.r1?.read?.length ?? readLength))
+        || (r2Pos != null && overlapsExon(r2Pos, p.r2?.read?.length ?? readLength));
+  });
+
+  return { txReads, txPairs };
+}
+
+function renderPerTranscriptCanvas({ transcript: t, geneInfo, geneSequence, txReads, txPairs, readLength }) {
+  const geneLen = geneSequence.length;
+  const minus   = geneInfo?.strand === -1;
+  const toG     = (cs, ce) => minus
+    ? [geneInfo.end - ce, geneInfo.end - cs + 1]
+    : [cs - geneInfo.start, ce - geneInfo.start + 1];
+
+  const exonIntervals = (t.exons || [])
+    .map(e => { const [gs, ge] = toG(e.start, e.end); return { gStart: gs, gEnd: ge }; })
+    .filter(e => e.gEnd > e.gStart && e.gStart >= 0)
+    .sort((a, b) => a.gStart - b.gStart);
+  if (!exonIntervals.length) return null;
+
+  const totalExonBp = exonIntervals.reduce((s, e) => s + (e.gEnd - e.gStart), 0);
+  const exonPxPerBp = Math.max(0.5, Math.min(12, 1400 / Math.max(1, totalExonBp)));
+  const INTRON_PX   = 24;
+  const MIN_EXON_PX = 16;
+  const { scale, totalWidth, breaks, exonW } = buildCompressedScale(exonIntervals, exonPxPerBp, INTRON_PX, MIN_EXON_PX, 12);
+
+  const LABEL_H = 16;
+  const COV_H   = 36;
+  const GAP     = 3;
+  const SCALE   = 2;
+
+  // Normalize read bar height so all transcript views render reads at the same
+  // physical size in the PDF regardless of canvas width (A4 landscape, 273mm content)
+  const ROW_H   = Math.max(3, Math.round(1.4 * totalWidth / 273));
+  const ROW_GAP = Math.max(1, Math.round(ROW_H * 0.35));
+
+  // Pre-placement pass — size canvas to fit all reads exactly
+  const rowRanges = [];
+  const placeAt = (xStart, xEnd) => {
     const w = Math.max(2, xEnd - xStart);
     for (let r = 0; r < rowRanges.length; r++) {
       if (!rowRanges[r].some(([a, b]) => xStart < b && xStart + w > a)) {
@@ -304,21 +565,12 @@ function renderRnaOverviewCanvas({
         return r;
       }
     }
-    if (rowRanges.length < MAX_ROWS) { rowRanges.push([[xStart, xStart + w]]); return rowRanges.length - 1; }
-    return -1;
-  }
+    rowRanges.push([[xStart, xStart + w]]);
+    return rowRanges.length - 1;
+  };
 
-  function drawRead(xStart, xEnd, color, rowIndex, alpha = 0.75) {
-    const ry = stripY + (rowIndex < 0 ? 0 : rowIndex) * (ROW_H + ROW_GAP);
-    ctx.globalAlpha = rowIndex < 0 ? 0.15 : alpha;
-    ctx.fillStyle   = color;
-    ctx.fillRect(xStart, ry, Math.max(2, xEnd - xStart), ROW_H);
-    ctx.globalAlpha = 1;
-    return ry;
-  }
-
-  // Pairs
-  for (const p of (validatedPairs || [])) {
+  const pairPlans = [];
+  for (const p of txPairs) {
     const { r1, r2 } = p;
     const r1Pos = r1?.position ?? r1?.positions?.[0];
     const r2Pos = r2?.position ?? r2?.positions?.[0];
@@ -328,61 +580,177 @@ function renderRnaOverviewCanvas({
     const x2s = scale(r2Pos);
     const x2e = scale(r2Pos + (r2.read?.length ?? readLength));
     const row  = placeAt(Math.min(x1s, x2s), Math.max(x1e, x2e));
-    const ry   = drawRead(x1s, x1e, (r1.orientation === "forward" ? FORWARD_COLOR : REVERSE_COLOR), row);
-    drawRead(x2s, x2e, (r2.orientation === "forward" ? FORWARD_COLOR : REVERSE_COLOR), row);
-    // Dotted insert line
     const [lEnd, rStart] = x1e < x2s ? [x1e, x2s] : [x2e, x1s];
-    if (rStart > lEnd) {
-      ctx.globalAlpha = row < 0 ? 0.15 : 0.7;
+    pairPlans.push({
+      row, x1s, x1e, x2s, x2e,
+      c1: r1.orientation === "forward" ? FORWARD_COLOR : REVERSE_COLOR,
+      c2: r2.orientation === "forward" ? FORWARD_COLOR : REVERSE_COLOR,
+      hasInsert: rStart > lEnd, lEnd, rStart,
+    });
+  }
+
+  const singlePlans = [];
+  for (const r of txReads) {
+    const color = r.orientation === "forward" ? FORWARD_COLOR : REVERSE_COLOR;
+    if (r.junctions?.length) {
+      const firstJ = r.junctions[0];
+      const lastJ  = r.junctions[r.junctions.length - 1];
+      const row    = placeAt(scale(firstJ.gStart), scale(lastJ.gStart + (lastJ.readEnd - lastJ.readStart)));
+      const segs   = r.junctions.map((j, i) => ({
+        jX1: scale(j.gStart),
+        jX2: scale(j.gStart + (j.readEnd - j.readStart)),
+        arcTo: i + 1 < r.junctions.length ? scale(r.junctions[i + 1].gStart) : null,
+      }));
+      singlePlans.push({ type: "junction", row, color, segs });
+    } else {
+      const pos = r.position ?? r.positions?.[0];
+      if (pos == null) continue;
+      const xS = scale(pos);
+      const xE = scale(pos + (r.read?.length ?? readLength));
+      singlePlans.push({ type: "simple", row: placeAt(xS, xE), color, xS, xE });
+    }
+  }
+
+  const STRIP_H = Math.max(1, rowRanges.length) * (ROW_H + ROW_GAP) + 4;
+  const canvasH = LABEL_H + COV_H + GAP + STRIP_H + 4;
+
+  const canvas = document.createElement("canvas");
+  canvas.width  = totalWidth * SCALE;
+  canvas.height = canvasH   * SCALE;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(SCALE, SCALE);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, totalWidth, canvasH);
+
+  // Intron bands
+  for (let i = 0; i < breaks.length; i++) {
+    const b      = breaks[i];
+    const bW     = exonW(b);
+    const bandStart = b.canvasX + bW;
+    const bandEnd   = i + 1 < breaks.length ? breaks[i + 1].canvasX : bandStart + INTRON_PX;
+    const iLen      = i + 1 < exonIntervals.length
+      ? exonIntervals[i + 1].gStart - exonIntervals[i].gEnd : 0;
+    ctx.fillStyle = INTRON_BG;
+    ctx.fillRect(bandStart, LABEL_H, bandEnd - bandStart, canvasH - LABEL_H);
+    if (iLen > 0 && bandEnd > bandStart + 4) {
+      ctx.fillStyle = INTRON_LABEL_FG;
+      ctx.font = "8px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "top";
+      const lbl = iLen >= 1000 ? `${(iLen / 1000).toFixed(1)}k` : `${iLen}`;
+      ctx.fillText(lbl, (bandStart + bandEnd) / 2, LABEL_H + 2);
+    }
+  }
+  // Leading intron band
+  if (breaks.length && breaks[0].canvasX > 12) {
+    ctx.fillStyle = INTRON_BG;
+    ctx.fillRect(12, LABEL_H, breaks[0].canvasX - 12, canvasH - LABEL_H);
+  }
+
+  // Coordinate labels
+  ctx.fillStyle = "#555555";
+  ctx.font = "9px monospace";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  for (const b of breaks) {
+    const chromPos = minus
+      ? (geneInfo.end || 0) - b.gStart
+      : (geneInfo.start || 0) + b.gStart;
+    ctx.fillText(String(chromPos), b.canvasX, LABEL_H / 2);
+  }
+
+  // Coverage histogram
+  const coverage = computeCoverage(txReads, geneLen, readLength);
+  let maxCov = 1;
+  for (let i = 0; i < coverage.length; i++) if (coverage[i] > maxCov) maxCov = coverage[i];
+
+  for (const b of breaks) {
+    const bW       = exonW(b);
+    const binCount = Math.ceil(bW);
+    const exonBp   = b.gEnd - b.gStart;
+    ctx.beginPath();
+    for (let bx = 0; bx <= binCount; bx++) {
+      const gs  = b.gStart + Math.floor((bx / binCount) * exonBp);
+      const ge  = b.gStart + Math.floor(((bx + 1) / binCount) * exonBp);
+      let sum = 0;
+      for (let i = gs; i < ge && i < geneLen; i++) sum += coverage[i];
+      const avg = sum / Math.max(1, ge - gs);
+      const y   = LABEL_H + COV_H - Math.round((avg / maxCov) * (COV_H - 4));
+      bx === 0 ? ctx.moveTo(b.canvasX + bx, y) : ctx.lineTo(b.canvasX + bx, y);
+    }
+    ctx.strokeStyle = FORWARD_COLOR;
+    ctx.lineWidth   = 1;
+    ctx.stroke();
+
+    ctx.beginPath();
+    ctx.moveTo(b.canvasX, LABEL_H + COV_H);
+    for (let bx = 0; bx <= binCount; bx++) {
+      const gs  = b.gStart + Math.floor((bx / binCount) * exonBp);
+      const ge  = b.gStart + Math.floor(((bx + 1) / binCount) * exonBp);
+      let sum = 0;
+      for (let i = gs; i < ge && i < geneLen; i++) sum += coverage[i];
+      const avg = sum / Math.max(1, ge - gs);
+      const y   = LABEL_H + COV_H - Math.round((avg / maxCov) * (COV_H - 4));
+      ctx.lineTo(b.canvasX + bx, y);
+    }
+    ctx.lineTo(b.canvasX + bW, LABEL_H + COV_H);
+    ctx.closePath();
+    ctx.fillStyle = FORWARD_COLOR + "28";
+    ctx.fill();
+  }
+  if (maxCov > 1) {
+    ctx.fillStyle = "#888";
+    ctx.font = "8px monospace";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(`max ${maxCov}`, 2, LABEL_H + 2);
+  }
+
+  // Read density strip — draw from pre-computed placements (no row cap)
+  const stripY = LABEL_H + COV_H + GAP;
+
+  const drawRead = (xStart, xEnd, color, row, alpha) => {
+    const ry = stripY + row * (ROW_H + ROW_GAP);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle   = color;
+    ctx.fillRect(xStart, ry, Math.max(2, xEnd - xStart), ROW_H);
+    ctx.globalAlpha = 1;
+    return ry;
+  };
+
+  for (const plan of pairPlans) {
+    const ry = drawRead(plan.x1s, plan.x1e, plan.c1, plan.row, 0.75);
+    drawRead(plan.x2s, plan.x2e, plan.c2, plan.row, 0.75);
+    if (plan.hasInsert) {
+      ctx.globalAlpha = 0.7;
       ctx.setLineDash([3, 3]);
       ctx.strokeStyle = "#888888";
       ctx.lineWidth   = 1;
-      ctx.beginPath(); ctx.moveTo(lEnd, ry + ROW_H / 2); ctx.lineTo(rStart, ry + ROW_H / 2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(plan.lEnd, ry + ROW_H / 2); ctx.lineTo(plan.rStart, ry + ROW_H / 2); ctx.stroke();
       ctx.setLineDash([]);
       ctx.globalAlpha = 1;
     }
   }
 
-  // Single reads (confirmed + greyed)
-  const allSingle = [
-    ...(matchingReads || []).map(r => ({ r, grey: false })),
-    ...(greyedR1Reads || []).map(r => ({ r, grey: true })),
-  ];
-  for (const { r, grey } of allSingle) {
-    const color = grey ? "#cccccc" : (r.orientation === "forward" ? FORWARD_COLOR : REVERSE_COLOR);
-
-    if (r.junctions?.length) {
-      const firstJ = r.junctions[0];
-      const lastJ  = r.junctions[r.junctions.length - 1];
-      const xMin   = scale(firstJ.gStart);
-      const xMax   = scale(lastJ.gStart + (lastJ.readEnd - lastJ.readStart));
-      const row    = placeAt(xMin, xMax);
-      for (let i = 0; i < r.junctions.length; i++) {
-        const j   = r.junctions[i];
-        const jX1 = scale(j.gStart);
-        const jX2 = scale(j.gStart + (j.readEnd - j.readStart));
-        drawRead(jX1, jX2, color, row, grey ? 0.4 : 0.9);
-        if (i < r.junctions.length - 1) {
-          const nextJ = r.junctions[i + 1];
-          const ry    = stripY + (row < 0 ? 0 : row) * (ROW_H + ROW_GAP);
-          ctx.globalAlpha = row < 0 ? 0.15 : (grey ? 0.4 : 1.0);
-          ctx.strokeStyle = color;
+  for (const plan of singlePlans) {
+    const ry = stripY + plan.row * (ROW_H + ROW_GAP);
+    if (plan.type === "junction") {
+      for (const seg of plan.segs) {
+        drawRead(seg.jX1, seg.jX2, plan.color, plan.row, 0.9);
+        if (seg.arcTo != null) {
+          ctx.globalAlpha = 1.0;
+          ctx.strokeStyle = plan.color;
           ctx.lineWidth   = 1.5;
-          ctx.beginPath(); ctx.moveTo(jX2, ry + ROW_H / 2); ctx.lineTo(scale(nextJ.gStart), ry + ROW_H / 2); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(seg.jX2, ry + ROW_H / 2); ctx.lineTo(seg.arcTo, ry + ROW_H / 2); ctx.stroke();
           ctx.globalAlpha = 1;
         }
       }
     } else {
-      const pos = r.position ?? r.positions?.[0];
-      if (pos == null) continue;
-      const xStart = scale(pos);
-      const xEnd   = scale(pos + (r.read?.length ?? readLength));
-      const row    = placeAt(xStart, xEnd);
-      drawRead(xStart, xEnd, color, row, grey ? 0.4 : 0.75);
+      drawRead(plan.xS, plan.xE, plan.color, plan.row, 0.75);
     }
   }
 
-  // Exon boundary tick marks
+  // Exon boundary ticks
   ctx.strokeStyle = "#cccccc";
   ctx.lineWidth   = 0.5;
   for (const b of breaks) {
@@ -518,7 +886,7 @@ function cleanFileName(name) {
 export async function exportOverviewPdf({
   seqMode, geneName, geneInfo, geneSequence, maskedGeneSeq, seedArrays,
   matchingReads, validatedPairs, greyedR1Reads,
-  coverageDataUrl, coverageDimensions, coverageTranscripts, readLength,
+  coverageDataUrl, coverageDimensions, coverageTranscripts, txEvidence, readLength,
   fileName,
 }) {
   const { jsPDF } = await import("jspdf");
@@ -577,7 +945,7 @@ export async function exportOverviewPdf({
     const stripCanvas = renderRnaOverviewCanvas({
       geneSequence, maskedGeneSeq, matchingReads, validatedPairs: validatedPairs || [],
       greyedR1Reads: greyedR1Reads || [], geneInfo,
-      transcripts: coverageTranscripts || null, readLength,
+      transcripts: coverageTranscripts || null, txEvidence: txEvidence || null, readLength,
     });
     if (stripCanvas) {
       const stripDataUrl = stripCanvas.toDataURL("image/png");
@@ -589,6 +957,69 @@ export async function exportOverviewPdf({
       doc.setTextColor(140, 140, 140);
       doc.text("Compressed scale: introns collapsed · teal = forward · amber = reverse", MARGIN, y);
       doc.setTextColor(0, 0, 0);
+    }
+  }
+
+  // Per-transcript views (RNA mode — all transcripts, evidence > 0 first then remainder)
+  if (isRna && coverageTranscripts?.length) {
+    doc.addPage(); y = MARGIN;
+
+    // Caution note
+    doc.setFont("helvetica", "bold"); doc.setFontSize(9);
+    doc.text("Reads that support Transcripts:", MARGIN, y); y += 5;
+    doc.setFont("helvetica", "normal"); doc.setFontSize(8);
+    const noteText =
+      "The following views use all reads that overlap the exons of each individual transcript. " +
+      "The same read may support multiple transcripts simultaneously. " +
+      "Exercise caution: scrutinise whether each transcript is a good fit, or whether external " +
+      "investigation is warranted. Also consider: is this the correct gene? Could these reads " +
+      "originate from a paralogue or pseudogene?";
+    const noteLines = doc.splitTextToSize(noteText, CW);
+    doc.text(noteLines, MARGIN, y); y += noteLines.length * 4 + 3;
+
+    // Paralog link (Ensembl Compara — uses the ENSG accession)
+    if (ensId.startsWith("ENSG")) {
+      const paralogsUrl = `https://www.ensembl.org/Homo_sapiens/Gene/Compara_Paralog?db=core;g=${ensId}`;
+      doc.setTextColor(30, 80, 180);
+      doc.textWithLink(`Paralogues on Ensembl: ${paralogsUrl}`, MARGIN, y, { url: paralogsUrl });
+      doc.setTextColor(0, 0, 0);
+      y += 6;
+    }
+
+    const sortedTx = [...coverageTranscripts].sort((a, b) => {
+      const fa = txEvidence?.get(a.id)?.fraction ?? -1;
+      const fb = txEvidence?.get(b.id)?.fraction ?? -1;
+      if (fb !== fa) return fb - fa;
+      return (a.id || "").localeCompare(b.id || "");
+    });
+
+    for (const t of sortedTx) {
+      const ev = txEvidence?.get(t.id) ?? null;
+      const { txReads, txPairs } = getReadsForTranscript(t, geneInfo, matchingReads, validatedPairs, readLength);
+      const txCanvas = renderPerTranscriptCanvas({ transcript: t, geneInfo, geneSequence, txReads, txPairs, readLength });
+      if (!txCanvas) continue;
+
+      const txMmH    = CW * (txCanvas.height / txCanvas.width);
+      const HEADER_H = 4;  // tight: header belongs visually to the canvas below it
+      const PRE_GAP  = 7;  // breathing room between previous canvas and this header
+      // Keep header + canvas together — page-break before the header, never between them
+      if (y + PRE_GAP + HEADER_H + txMmH > PH - MARGIN) { doc.addPage(); y = MARGIN; }
+      else { y += PRE_GAP; }
+
+      // Label line: "ENST00000396069.5 [canonical]   73%  63 spliced reads  protein_coding  in filename"
+      //         or: "ENST00000396069.5   No spliced reads  protein_coding"
+      doc.setFont("helvetica", "bold"); doc.setFontSize(8);
+      const txLabel = `${t.id}${t.isCanonical ? " [canonical]" : ""}`;
+      doc.text(txLabel, MARGIN, y);
+      doc.setFont("helvetica", "normal");
+      const evStr = ev
+        ? `  ${Math.round(ev.fraction * 100)}%  ${ev.count} spliced reads  ${t.biotype}${cleanFile ? `  in ${cleanFile}` : ""}`
+        : `  No spliced reads  ${t.biotype}`;
+      doc.text(evStr, MARGIN + doc.getTextWidth(txLabel), y);
+      y += HEADER_H;
+
+      doc.addImage(txCanvas.toDataURL("image/png"), "PNG", MARGIN, y, CW, txMmH);
+      y += txMmH;
     }
   }
 

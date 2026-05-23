@@ -3,11 +3,19 @@ import * as Styles from "../styles/fastq-gene-finder-styles.jsx";
 
 export default function MoreInfoWidget() {
   const [showInfo, setShowInfo] = useState(false);
+  const [showFastqInfo, setShowFastqInfo] = useState(false);
 
   return (
     <div>
       <button onClick={() => setShowInfo(true)} style={Styles.infoButton}>
         More Info
+      </button>
+
+      <button
+        onClick={() => setShowFastqInfo(true)}
+        style={{ ...Styles.infoButton, marginLeft: "1rem" }}
+      >
+        FASTQ Info
       </button>
 
       {showInfo && (
@@ -87,6 +95,134 @@ export default function MoreInfoWidget() {
               }}
             >
               <button onClick={() => setShowInfo(false)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showFastqInfo && (
+        <div
+          style={{ ...Styles.modalOverlay }}
+          onClick={() => setShowFastqInfo(false)}
+        >
+          <div
+            style={{ ...Styles.modalCard }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => setShowFastqInfo(false)}
+              style={Styles.modalCloseButton}
+              aria-label="Close"
+            >
+              x
+            </button>
+
+            <div style={{ paddingRight: "2rem" }}>
+              FASTQ files were developed in the 2000s as an extension of the
+              earlier FASTA format, which had been created in the 1980s as a
+              simple text-based format for storing nucleotide sequences. FASTA
+              files consist of a header line starting with "&gt;", followed by
+              one or more sequence lines, and are commonly used in
+              bioinformatics for storing and sharing nucleotide or protein
+              sequences. FASTQ extended this by adding quality scores output
+              during sequencing for each base in the sequence. A FASTQ file
+              consists of four lines per read: a header line starting with "@",
+              a sequence line, a "+" line (which can optionally repeat the
+              header), and a quality score line. Originally this involved a
+              single long line for the sequence and quality scores, but in
+              practice many FASTQ files break these into multiple lines for
+              readability, as long as the sequence and quality scores are in the
+              correct order and correspond to each other. FASTQ files produced
+              in short-read sequencing will usually have short lines of around
+              70-150 bases, while long-read sequencing FASTQ files may have much
+              longer lines or even single lines for the whole read.
+              <br />
+              <br />
+              Example of a FASTQ entry:
+              <br />
+              <br />
+              <span style={{ marginLeft: "2rem" }}>@SEQ_ID</span>
+              <br />
+              <span style={{ marginLeft: "2rem" }}>
+                GATTTGGGGTTCAAAGCAGTATCGATCAAATAGTAAATTTGCCAAA
+              </span>
+              <br />
+              <span style={{ marginLeft: "2rem" }}>+</span>
+              <br />
+              <span style={{ marginLeft: "2rem" }}>
+                !''*((((***+))%%%++)(%%%%).1***-+*''))**55CCFA
+              </span>
+              <br />
+              <br />
+              The header line can contain various metadata about the read, such
+              as its identifier, sequencing run information, and more. The
+              sequence line contains the nucleotide sequence of the read. The
+              quality score line encodes the quality of each base in the
+              sequence using ASCII characters, corresponding to the probability
+              of a base call being incorrect. The exact encoding can vary (e.g.
+              Phred+33 or Phred+64), but in general higher quality scores
+              correspond to more reliable base calls.
+              <br />
+              <br />
+              [Note: Quality scores can be converted to error probabilities
+              using the formula:
+              <span style={{ marginLeft: "2rem" }}>P(error) = 10^(-Q/10)</span>
+              <br />
+              but when processing very large FASTQ files, it is often more
+              efficient to precalculate probabilities and use lookup tables
+              rather than converting quality scores on the fly.]
+              <br />
+              <br />
+              FASTQ files are commonly used in bioinformatics for storing raw
+              sequencing data, and many tools exist for processing and analyzing
+              them. However, due to their size, they can be challenging to work
+              with, especially for large datasets. Tools that can efficiently
+              stream and process FASTQ files without loading them entirely into
+              memory can be very useful for exploratory analysis and quick
+              lookups.
+              <br />
+              <br />
+              Types of FASTQ:
+              <br />
+              <span style={{ marginLeft: "2rem" }}>
+                - Single-end FASTQ: contains reads from a single end of a
+                sequencing run.
+              </span>
+              <br />
+              <span style={{ marginLeft: "2rem" }}>
+                - Paired-end FASTQ: contains reads from both ends of a
+                sequencing run, typically with R1 and R2 files.
+              </span>
+              <br />
+              <span style={{ marginLeft: "2rem" }}>
+                - Long-read FASTQ: contains reads from long-read sequencing
+                technologies, which may have much longer sequences and quality
+                score lines. (Not suitable for this tool.)
+              </span>
+              <br />
+              <span style={{ marginLeft: "2rem" }}>
+                - ATAC-Seq and ChIP-Seq FASTQ: may contain specific patterns or
+                characteristics related to the assay type, such as shorter
+                fragments or specific adapter sequences. (Not suitable for this
+                tool.)
+              </span>
+              <br />
+              <span style={{ marginLeft: "2rem" }}>
+                - scRNA-Seq FASTQ: may contain specific patterns or
+                characteristics related to single-cell RNA sequencing, such as
+                cell barcodes and unique molecular identifiers (UMIs). (Not
+                suitable for this tool.)
+              </span>
+            </div>
+
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                marginTop: "1rem",
+              }}
+            >
+              <button onClick={() => setShowFastqInfo(false)}>Close</button>
             </div>
           </div>
         </div>

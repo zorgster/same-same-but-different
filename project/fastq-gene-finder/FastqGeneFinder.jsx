@@ -113,6 +113,7 @@ async function streamFastq({
   onProgress,
   tick,
   batchSize = 200,
+  readLength,
 }) {
   const totalBytes = file.size;
   let bytesRead = 0;
@@ -120,108 +121,93 @@ async function streamFastq({
   const isCompressed = file.name.toLowerCase().endsWith(".gz");
   const stream = getFastqReadableStream(
     file,
-    isCompressed
-      ? (n) => {
-          compressedBytesRead = n;
-        }
-      : null,
+    isCompressed ? (n) => { compressedBytesRead = n; } : null,
     isCompressed,
   );
   const reader = stream.getReader();
 
-  let lineCount = 0;
-  let seqLine = null; // Uint8Array for current sequence line
   let readIndex = 0;
   let remainder = new Uint8Array(0);
-  let lastProgressReport = 0; // throttle setProgress to ~10 calls/s
+  let lastProgressReport = 0;
 
   try {
     while (true) {
       const { value, done } = await reader.read();
-      if (done) break;
 
-      if (abortRef && abortRef.current) {
-        await reader.cancel();
-        return { done: true };
-      }
-
+      if (abortRef && abortRef.current) { await reader.cancel(); return { done: true }; }
       if (pauseRef && pauseRef.current) {
-        while (pauseRef.current && !(abortRef && abortRef.current)) {
-          await tick();
-        }
-        if (abortRef && abortRef.current) {
-          await reader.cancel();
-          return { done: true };
-        }
+        while (pauseRef.current && !(abortRef && abortRef.current)) await tick();
+        if (abortRef && abortRef.current) { await reader.cancel(); return { done: true }; }
       }
 
-      bytesRead += value ? value.byteLength : 0;
-      if (onProgress) {
-        const now = Date.now();
-        if (now - lastProgressReport >= 100) {
-          onProgress(
-            isCompressed ? compressedBytesRead : bytesRead,
-            totalBytes,
-            file.name,
-          );
-          lastProgressReport = now;
-        }
-      }
-
-      const chunk = remainder.length ? concat(remainder, value) : value;
-      let segStart = 0;
-
-      for (let pos = 0; pos < chunk.length; pos++) {
-        if (chunk[pos] === 10) {
-          // newline byte
-          const lineInRecord = lineCount % 4;
-
-          if (lineInRecord === 1) {
-            // sequence line — copy bytes (chunk may be replaced next iteration)
-            const end = pos > segStart && chunk[pos - 1] === 13 ? pos - 1 : pos;
-            seqLine = chunk.slice(segStart, end);
-          } else if (lineInRecord === 3 && seqLine) {
-            // quality line — emit the read
-            const end = pos > segStart && chunk[pos - 1] === 13 ? pos - 1 : pos;
-            const qualLine = chunk.slice(segStart, end);
-            try {
-              onRead(seqLine, qualLine, readIndex);
-            } catch (err) {
-              console.error("onRead handler threw:", err);
-            }
-            readIndex++;
-            seqLine = null;
-            if (readIndex % batchSize === 0) await tick();
+      if (value) {
+        bytesRead += value.byteLength;
+        if (onProgress) {
+          const now = Date.now();
+          if (now - lastProgressReport >= 100) {
+            onProgress(isCompressed ? compressedBytesRead : bytesRead, totalBytes, file.name);
+            lastProgressReport = now;
           }
-
-          lineCount++;
-          segStart = pos + 1;
         }
       }
 
-      remainder = chunk.subarray(segStart);
-    }
+      const chunk = remainder.length
+        ? (value ? concat(remainder, value) : remainder)
+        : (value ?? new Uint8Array(0));
+      remainder = new Uint8Array(0);
 
-    // Handle file that doesn't end with a newline (emit final quality line if complete)
-    if (remainder.length > 0 && lineCount % 4 === 3 && seqLine) {
-      const qualLine =
-        remainder[remainder.length - 1] === 13
-          ? remainder.slice(0, remainder.length - 1)
-          : remainder;
-      try {
-        onRead(seqLine, qualLine, readIndex);
-      } catch (err) {
-        console.error("onRead handler threw:", err);
+      if (done && chunk.length < readLength) break;
+
+      let pos = 0;
+      let blockLength = 0;
+
+      while (true) {
+        const bytesAvail = chunk.length - pos;
+
+        // Single upfront guard — replaces all per-step bounds checks inside the loop.
+        // blockLength = 0 until first record is measured; use readLength*4 as a safe estimate.
+        if (
+          (blockLength === 0 && bytesAvail < readLength * 4) ||
+          (done && bytesAvail < readLength) ||
+          (blockLength > 0 && bytesAvail < blockLength + 10)
+        ) { remainder = chunk.subarray(pos); break; }
+
+        const recordStart = pos;
+
+        // Line 0 — header: scan for \n (safe — upfront guard guarantees enough bytes)
+        while (chunk[pos] !== 10) pos++;
+        pos++; // past \n → seqStart
+
+        // Line 1 — sequence: skip exactly readLength bytes + terminator
+        const seqStart = pos;
+        pos += readLength;
+        if (chunk[pos] === 13) pos++;
+        pos++; // past \n → plusStart
+
+        // Line 2 — +: scan for \n (spec allows full header repeat here)
+        while (chunk[pos] !== 10) pos++;
+        pos++; // past \n → qualStart
+
+        // Line 3 — quality: skip exactly readLength bytes + optional terminator
+        pos += readLength;
+        if (pos < chunk.length && chunk[pos] === 13) pos++;
+        if (pos < chunk.length && chunk[pos] === 10) pos++;
+
+        const thisBlockLength = pos - recordStart;
+        if (thisBlockLength > blockLength) blockLength = thisBlockLength;
+
+        try { onRead(chunk.subarray(seqStart, seqStart + readLength), readIndex); }
+        catch (err) { console.error("onRead handler threw:", err); }
+        readIndex++;
+        if (readIndex % batchSize === 0) await tick();
       }
+
+      if (done) break;
     }
 
     return { done: true };
   } finally {
-    try {
-      reader.releaseLock && reader.releaseLock();
-    } catch (e) {
-      /* ignore */
-    }
+    try { reader.releaseLock && reader.releaseLock(); } catch (e) { /* ignore */ }
   }
 }
 
@@ -523,11 +509,11 @@ function buildValidatedPairs(
     let best;
     if (rnaMode) {
       // Pick candidate closest to either end of R1
-      const r1Start = r1.position ?? r1.positions?.[0] ?? 0;
+      const r1Start = r1.position ?? 0;
       const r1End = r1Start + (readLength ?? 100);
       best = candidates.reduce((a, b) => {
-        const aPos = a.position ?? a.positions?.[0] ?? 0;
-        const bPos = b.position ?? b.positions?.[0] ?? 0;
+        const aPos = a.position ?? 0;
+        const bPos = b.position ?? 0;
         const aDist = Math.min(
           Math.abs(aPos - r1Start),
           Math.abs(aPos - r1End),
@@ -540,8 +526,8 @@ function buildValidatedPairs(
       });
     } else {
       best = candidates.find((r2) => {
-        const r1Pos = r1.position ?? r1.positions?.[0] ?? 0;
-        const r2Pos = r2.position ?? r2.positions?.[0] ?? 0;
+        const r1Pos = r1.position ?? 0;
+        const r2Pos = r2.position ?? 0;
         const d = Math.abs(r2Pos - r1Pos);
         return (
           d >= minInsert && d <= maxInsert && r1.orientation !== r2.orientation
@@ -550,8 +536,8 @@ function buildValidatedPairs(
     }
 
     if (best) {
-      const r1Pos = r1.position ?? r1.positions?.[0] ?? 0;
-      const r2Pos = best.position ?? best.positions?.[0] ?? 0;
+      const r1Pos = r1.position ?? 0;
+      const r2Pos = best.position ?? 0;
       pairs.push({ r1, r2: best, insertSize: Math.abs(r2Pos - r1Pos) });
     } else {
       greyedR1.push({ ...r1, pairedStatus: "unconfirmed" });
@@ -621,6 +607,7 @@ export default function FastqGeneFinderApp() {
   const pauseStartTimeRef = useRef(null);
   const totalPausedMsRef = useRef(0);
   const r1MatchMapRef = useRef(null);
+  const seedLoadInputRef = useRef(null);
 
   const [, setTimerTick] = useState(0);
   const [finalElapsedMs, setFinalElapsedMs] = useState(null);
@@ -711,7 +698,7 @@ export default function FastqGeneFinderApp() {
     ? greyedR1Reads.filter((r) => (r.score ?? 0) >= pileupMinScore)
     : [];
 
-  const getReadStart = (read) => read.position ?? read.positions?.[0];
+  const getReadStart = (read) => read.position;
 
   const movePileupWindow = (direction) => {
     if (!processingFinished) return;
@@ -1125,11 +1112,11 @@ export default function FastqGeneFinderApp() {
     // Stream FASTQ, accumulate reads into batches
     await streamFastq({
       file,
-      fileName: file.name,
+      readLength,
       batchSize: BATCH_SIZE,
-      onRead: (seqBytes, qualBytes, index) => {
+      onRead: (seqBytes, index) => {
         totalReadsRef.current++;
-        currentBatchRef.current.push({ seqBytes, qualBytes, index });
+        currentBatchRef.current.push({ seqBytes, index });
         if (currentBatchRef.current.length >= BATCH_SIZE) {
           pendingBatchRef.current.push(currentBatchRef.current);
           currentBatchRef.current = [];
@@ -1318,10 +1305,11 @@ export default function FastqGeneFinderApp() {
 
     await streamFastq({
       file: r2File,
+      readLength,
       batchSize: BATCH_SIZE,
-      onRead: (seqBytes, qualBytes, index) => {
+      onRead: (seqBytes, index) => {
         if (!r2Map.has(index)) return; // skip reads whose R1 did not match
-        currentBatchRef.current.push({ seqBytes, qualBytes, index });
+        currentBatchRef.current.push({ seqBytes, index });
         if (currentBatchRef.current.length >= BATCH_SIZE) {
           pendingBatchRef.current.push(currentBatchRef.current);
           currentBatchRef.current = [];
@@ -1480,6 +1468,52 @@ export default function FastqGeneFinderApp() {
     a.download = `seeds-${geneName || "gene"}-${Date.now()}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  function handleExportSeedsJson() {
+    if (!seedArrays.length) return;
+    const payload = JSON.stringify({ readLength, seedArrays }, null, 2);
+    const blob = new Blob([payload], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `seeds-${geneName || "gene"}-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function handleLoadSeeds(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = "";
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const loaded = JSON.parse(ev.target.result);
+        if (!Array.isArray(loaded.seedArrays) || !loaded.seedArrays.length) return;
+        if (loaded.readLength !== readLength) {
+          alert(`Seed file was built for readLength=${loaded.readLength}, current readLength=${readLength}. Seeds not loaded.`);
+          return;
+        }
+        const seeds = loaded.seedArrays;
+        setSeedArrays(seeds);
+        indicesRef.current = buildSeedIndices(geneSequence, readLength, seeds);
+        if (seqMode === "RNA" && transcripts?.length && geneInfo) {
+          const txData = buildCombinedTxIndex(transcripts, geneSequence, geneInfo, readLength, seeds);
+          txDataRef.current = txData;
+          setTxIndexStats(computeTxIndexStats(txData.indices, txData.exonMaps, transcripts));
+        } else if (maskedGeneSeq) {
+          const intervals = extractExonIntervals(maskedGeneSeq);
+          const spliced = intervals.length ? buildSplicedIndex(intervals, geneSequence, readLength, seeds) : null;
+          txDataRef.current = spliced ? [spliced] : [];
+        }
+        setSeedStats({ perSeedStats: [], topUniqueSamples: [] });
+        computeSeedStatsAsync(indicesRef.current, seeds).then(setSeedStats);
+      } catch {
+        alert("Could not parse seed file.");
+      }
+    };
+    reader.readAsText(file);
   }
 
   async function handleExportPdf() {
@@ -1642,19 +1676,39 @@ export default function FastqGeneFinderApp() {
       {/* Tab: Seeds */}
       {activeTab === "seeds" && (
         <div style={{ marginTop: "1rem" }}>
-          {seedArrays.length > 0 && (
+          <div style={{ display: "flex", gap: "0.4rem", marginBottom: "0.5rem", flexWrap: "wrap" }}>
+            {seedArrays.length > 0 && (
+              <>
+                <button
+                  onClick={handleExportSeeds}
+                  style={{ fontSize: "11px", padding: "2px 8px", cursor: "pointer" }}
+                >
+                  Export Seeds CSV
+                </button>
+                <button
+                  onClick={handleExportSeedsJson}
+                  style={{ fontSize: "11px", padding: "2px 8px", cursor: "pointer" }}
+                >
+                  Export Seeds JSON
+                </button>
+              </>
+            )}
             <button
-              onClick={handleExportSeeds}
-              style={{
-                fontSize: "11px",
-                padding: "2px 8px",
-                marginBottom: "0.5rem",
-                cursor: "pointer",
-              }}
+              onClick={() => seedLoadInputRef.current?.click()}
+              disabled={!geneSequence || !readLength}
+              title={!geneSequence || !readLength ? "Do a gene lookup first" : "Load a previously saved seeds JSON"}
+              style={{ fontSize: "11px", padding: "2px 8px", cursor: geneSequence && readLength ? "pointer" : "default", opacity: geneSequence && readLength ? 1 : 0.5 }}
             >
-              Export Seeds CSV
+              Load Seeds JSON
             </button>
-          )}
+            <input
+              ref={seedLoadInputRef}
+              type="file"
+              accept=".json"
+              style={{ display: "none" }}
+              onChange={handleLoadSeeds}
+            />
+          </div>
           <SeedVisualization seedArrays={seedArrays} readLength={readLength} />
           <div
             style={{

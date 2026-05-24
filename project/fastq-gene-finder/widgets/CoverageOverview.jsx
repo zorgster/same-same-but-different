@@ -141,7 +141,7 @@ const CoverageOverview = forwardRef(function CoverageOverview(
     if (!geneLen || !matchingReads.length) return null;
     const diff = new Int32Array(geneLen + 1);
     for (const read of matchingReads) {
-      const pos = read.position ?? read.positions?.[0];
+      const pos = read.position;
       if (pos == null || !Number.isFinite(pos) || pos < 0 || pos >= geneLen)
         continue;
       diff[pos]++;

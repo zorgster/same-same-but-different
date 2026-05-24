@@ -1,6 +1,6 @@
 let seedArrays, seedIndices, minSeedMatches;
 let txData = [];
-let positionSeedMap, RC_BYTES;
+let positionSeedMap;
 let isAborted = false;
 
 function txPosToGenePos(txPos, exonMap) {
@@ -27,10 +27,6 @@ function computeJunctions(txPos, readLen, exonMap) {
   return segs;
 }
 
-// BYTE_TO_CHAR still needed for building the display seqStr on match
-const BYTE_TO_CHAR = new Array(256);
-for (let i = 0; i < 256; i++) BYTE_TO_CHAR[i] = String.fromCharCode(i);
-
 // 2-bit numeric key encoding — A=0, T=1, C=2, G=3 (N/other=0)
 // Keys are built with: key = key * 4 + BASE_BITS[byte]  (pure arithmetic, no bitwise ops)
 // Matches buildSeedIndices encoding in FastqGeneFinder.jsx exactly.
@@ -56,6 +52,17 @@ const fwdSeedsMap = new Map();
 const revScores = new Map();
 const revSeedsMap = new Map();
 
+// Reusable tx-index Maps for RNA mode (same pattern — hoisted to avoid GC churn)
+const txFwdScores  = new Map();
+const txFwdBest    = new Map();
+const txFwdSeedIds = new Map();
+const txRevScores  = new Map();
+const txRevBest    = new Map();
+const txRevSeedIds = new Map();
+
+// Reusable txEvidence array — cleared per read, sliced only on actual match
+const txEvidence = [];
+
 self.onmessage = ({ data: { type, payload } }) => {
   if (type === "init") {
     ({ seedArrays, seedIndices, minSeedMatches } = payload);
@@ -70,13 +77,6 @@ self.onmessage = ({ data: { type, payload } }) => {
         positionSeedMap.get(pos).push(s);
       }
     }
-
-    // RC byte complement lookup (A↔T, C↔G, N→N; everything else → N)
-    RC_BYTES = new Uint8Array(256).fill(78);
-    RC_BYTES[65] = 84; RC_BYTES[84] = 65;
-    RC_BYTES[67] = 71; RC_BYTES[71] = 67;
-    RC_BYTES[97] = 116; RC_BYTES[116] = 97;
-    RC_BYTES[99] = 103; RC_BYTES[103] = 99;
 
     // Allocate reusable numeric key arrays once for this worker's lifetime
     readKeysFwd = new Float64Array(seedArrays.length);
@@ -96,7 +96,7 @@ self.onmessage = ({ data: { type, payload } }) => {
     const matches = [];
     const numSeeds = seedArrays.length;
 
-    for (const { seqBytes, qualBytes, index } of reads) {
+    for (const { seqBytes, index } of reads) {
       if (isAborted) return;
 
       const readLen = seqBytes.length;
@@ -141,37 +141,28 @@ self.onmessage = ({ data: { type, payload } }) => {
         }
       }
 
-      // Lazy string builds — only allocate when a match is confirmed
-      let seqStr = null;
-      let rcStr  = null;
       let hasMatch = false;
 
-      // Gene-sequence forward matches
+      // Gene-sequence forward matches — store raw seqBytes; string decode deferred to display
       for (const [pos, score] of fwdScores) {
         if (score >= minSeedMatches) {
-          if (!seqStr) seqStr = String.fromCharCode(...seqBytes);
           matches.push({
-            read: seqStr, orientation: "forward",
+            seqBytes, orientation: 1,
             readNumber: index + 1, fastqHeaderLine: index * 4 + 1, fastqSequenceLine: index * 4 + 2,
-            position: pos, positions: [pos], score, scores: [score],
+            position: pos, score,
             index, seedIds: fwdSeedsMap.get(pos) || [],
           });
           hasMatch = true;
         }
       }
 
-      // Gene-sequence reverse matches
+      // Gene-sequence reverse matches — seqBytes are forward; orientation=0 tells decoder to RC
       for (const [pos, score] of revScores) {
         if (score >= minSeedMatches) {
-          if (!rcStr) {
-            const rcArr = new Array(readLen);
-            for (let i = 0; i < readLen; i++) rcArr[i] = String.fromCharCode(RC_BYTES[seqBytes[readLen - 1 - i]]);
-            rcStr = rcArr.join("");
-          }
           matches.push({
-            read: rcStr, orientation: "reverse",
+            seqBytes, orientation: 0,
             readNumber: index + 1, fastqHeaderLine: index * 4 + 1, fastqSequenceLine: index * 4 + 2,
-            position: pos, positions: [pos], score, scores: [score],
+            position: pos, score,
             index, seedIds: revSeedsMap.get(pos) || [],
           });
           hasMatch = true;
@@ -198,11 +189,10 @@ self.onmessage = ({ data: { type, payload } }) => {
               if (score >= minSeedMatches) {
                 const gPos = txPosToGenePos(txPos, exonMap);
                 if (gPos != null) {
-                  if (!seqStr) seqStr = String.fromCharCode(...seqBytes);
                   matches.push({
-                    read: seqStr, orientation: "forward",
+                    seqBytes, orientation: 1,
                     readNumber: index + 1, fastqHeaderLine: index * 4 + 1, fastqSequenceLine: index * 4 + 2,
-                    position: gPos, positions: [gPos], score, scores: [score],
+                    position: gPos, score,
                     index, seedIds: fwdSeedsMap.get(txPos) || [], source: txId,
                     junctions: computeJunctions(txPos, readLen, exonMap),
                   });
@@ -223,15 +213,10 @@ self.onmessage = ({ data: { type, payload } }) => {
               if (score >= minSeedMatches) {
                 const gPos = txPosToGenePos(txPos, exonMap);
                 if (gPos != null) {
-                  if (!rcStr) {
-                    const rcArr = new Array(readLen);
-                    for (let i = 0; i < readLen; i++) rcArr[i] = String.fromCharCode(RC_BYTES[seqBytes[readLen - 1 - i]]);
-                    rcStr = rcArr.join("");
-                  }
                   matches.push({
-                    read: rcStr, orientation: "reverse",
+                    seqBytes, orientation: 0,
                     readNumber: index + 1, fastqHeaderLine: index * 4 + 1, fastqSequenceLine: index * 4 + 2,
-                    position: gPos, positions: [gPos], score, scores: [score],
+                    position: gPos, score,
                     index, seedIds: revSeedsMap.get(txPos) || [], source: txId,
                     junctions: computeJunctions(txPos, readLen, exonMap),
                   });
@@ -244,11 +229,9 @@ self.onmessage = ({ data: { type, payload } }) => {
           // Combined per-transcript index: 13 lookups accumulate scores for all transcripts at once.
           const { indices: txIndices, exonMaps } = txData;
 
-          // Accumulate per-transcript scores (fwd and rev)
-          const txFwdScores = new Map(); // txId → score
-          const txFwdBest   = new Map(); // txId → best txPos
-          const txRevScores = new Map();
-          const txRevBest   = new Map();
+          // Accumulate per-transcript scores (fwd and rev) — reuse module-level Maps
+          txFwdScores.clear(); txFwdBest.clear(); txFwdSeedIds.clear();
+          txRevScores.clear(); txRevBest.clear(); txRevSeedIds.clear();
 
           for (let s = 0; s < numSeeds; s++) {
             const fwdHit = txIndices[s].get(readKeysFwd[s]);
@@ -256,6 +239,8 @@ self.onmessage = ({ data: { type, payload } }) => {
               for (const [txId, positions] of fwdHit) {
                 txFwdScores.set(txId, (txFwdScores.get(txId) || 0) + 1);
                 if (!txFwdBest.has(txId)) txFwdBest.set(txId, positions[0]);
+                const sl = txFwdSeedIds.get(txId);
+                if (sl) sl.push(seedArrays[s].id); else txFwdSeedIds.set(txId, [seedArrays[s].id]);
               }
             }
             const revHit = txIndices[s].get(readKeysRev[s]);
@@ -263,12 +248,14 @@ self.onmessage = ({ data: { type, payload } }) => {
               for (const [txId, positions] of revHit) {
                 txRevScores.set(txId, (txRevScores.get(txId) || 0) + 1);
                 if (!txRevBest.has(txId)) txRevBest.set(txId, positions[0]);
+                const sl = txRevSeedIds.get(txId);
+                if (sl) sl.push(seedArrays[s].id); else txRevSeedIds.set(txId, [seedArrays[s].id]);
               }
             }
           }
 
-          // Collect all transcripts above threshold into txEvidence; pick best for match
-          const txEvidence = [];
+          // Collect all transcripts above threshold; pick best for match
+          txEvidence.length = 0;
           let bestScore = 0, bestTxId = null, bestTxPos = null, bestOrientation = null;
 
           for (const [txId, score] of txFwdScores) {
@@ -276,7 +263,7 @@ self.onmessage = ({ data: { type, payload } }) => {
               txEvidence.push({ txId, score });
               if (score > bestScore) {
                 bestScore = score; bestTxId = txId;
-                bestTxPos = txFwdBest.get(txId); bestOrientation = "forward";
+                bestTxPos = txFwdBest.get(txId); bestOrientation = 1;
               }
             }
           }
@@ -286,7 +273,7 @@ self.onmessage = ({ data: { type, payload } }) => {
                 txEvidence.push({ txId, score });
               if (score > bestScore) {
                 bestScore = score; bestTxId = txId;
-                bestTxPos = txRevBest.get(txId); bestOrientation = "reverse";
+                bestTxPos = txRevBest.get(txId); bestOrientation = 0;
               }
             }
           }
@@ -295,31 +282,16 @@ self.onmessage = ({ data: { type, payload } }) => {
             const exonMap = exonMaps.get(bestTxId);
             const gPos = exonMap ? txPosToGenePos(bestTxPos, exonMap) : null;
             if (gPos != null) {
-              if (bestOrientation === "forward") {
-                if (!seqStr) seqStr = String.fromCharCode(...seqBytes);
-                matches.push({
-                  read: seqStr, orientation: "forward",
-                  readNumber: index + 1, fastqHeaderLine: index * 4 + 1, fastqSequenceLine: index * 4 + 2,
-                  position: gPos, positions: [gPos], score: bestScore, scores: [bestScore],
-                  index, seedIds: [], source: bestTxId,
-                  junctions: computeJunctions(bestTxPos, readLen, exonMap),
-                  txEvidence,
-                });
-              } else {
-                if (!rcStr) {
-                  const rcArr = new Array(readLen);
-                  for (let i = 0; i < readLen; i++) rcArr[i] = String.fromCharCode(RC_BYTES[seqBytes[readLen - 1 - i]]);
-                  rcStr = rcArr.join("");
-                }
-                matches.push({
-                  read: rcStr, orientation: "reverse",
-                  readNumber: index + 1, fastqHeaderLine: index * 4 + 1, fastqSequenceLine: index * 4 + 2,
-                  position: gPos, positions: [gPos], score: bestScore, scores: [bestScore],
-                  index, seedIds: [], source: bestTxId,
-                  junctions: computeJunctions(bestTxPos, readLen, exonMap),
-                  txEvidence,
-                });
-              }
+              matches.push({
+                seqBytes, orientation: bestOrientation,
+                readNumber: index + 1, fastqHeaderLine: index * 4 + 1, fastqSequenceLine: index * 4 + 2,
+                position: gPos, score: bestScore,
+                index,
+                seedIds: bestOrientation === 1 ? (txFwdSeedIds.get(bestTxId) || []) : (txRevSeedIds.get(bestTxId) || []),
+                source: bestTxId,
+                junctions: computeJunctions(bestTxPos, readLen, exonMap),
+                txEvidence: txEvidence.slice(),
+              });
               hasMatch = true;
             }
           }

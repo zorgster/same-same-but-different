@@ -1,5 +1,7 @@
+import { DECODE_CHAR, decodeRead } from "./seqUtils.js";
+
 export function normalizeSingleRead(m) {
-  const seq = m.read || "";
+  const seq = m.seqBytes ?? new Uint8Array(0);
   if (m.junctions?.length) {
     const first = m.junctions[0];
     const last  = m.junctions[m.junctions.length - 1];
@@ -10,7 +12,7 @@ export function normalizeSingleRead(m) {
       bridgeChar: "=",
     };
   }
-  const start = m.position ?? m.positions?.[0];
+  const start = m.position;
   return {
     ...m,
     start,
@@ -23,8 +25,8 @@ export function normalizeSingleRead(m) {
 // Internal exon gaps use bridgeAfter "=" ; the final segment carries bridgeAfter for the
 // inter-read gap (either "~" for the insert, or undefined for the last segment of R2).
 export function buildEndSegments(read, seqOffset, finalBridgeAfter) {
-  const seq   = read.read || "";
-  const pos   = read.position ?? read.positions?.[0] ?? 0;
+  const seq   = read.seqBytes ?? new Uint8Array(0);
+  const pos   = read.position ?? 0;
   const segs  = [];
   let offset  = seqOffset;
 
@@ -40,7 +42,12 @@ export function buildEndSegments(read, seqOffset, finalBridgeAfter) {
       });
       offset += len;
     }
-    return { segs, seq: read.junctions.map(j => seq.slice(j.readStart, j.readEnd)).join(""), seqEnd: offset };
+    const junctionSeq = read.junctions.map(j => seq.subarray(j.readStart, j.readEnd));
+    const totalLen = junctionSeq.reduce((s, a) => s + a.length, 0);
+    const combined = new Uint8Array(totalLen);
+    let off = 0;
+    for (const part of junctionSeq) { combined.set(part, off); off += part.length; }
+    return { segs, seq: combined, seqEnd: offset };
   }
 
   segs.push({
@@ -54,8 +61,8 @@ export function buildEndSegments(read, seqOffset, finalBridgeAfter) {
 
 export function normalizePairedEntry({ r1, r2 }) {
   // Always put the genomically earlier read first so the insert gap reads left→right
-  const r1Pos = r1.position ?? r1.positions?.[0] ?? 0;
-  const r2Pos = r2.position ?? r2.positions?.[0] ?? 0;
+  const r1Pos = r1.position ?? 0;
+  const r2Pos = r2.position ?? 0;
   const [first, second] = r1Pos <= r2Pos ? [r1, r2] : [r2, r1];
 
   const { segs: firstSegs, seq: firstSeq, seqEnd: firstEnd } =
@@ -64,7 +71,12 @@ export function normalizePairedEntry({ r1, r2 }) {
     buildEndSegments(second, firstEnd, undefined);
 
   const junctions   = [...firstSegs, ...secondSegs];
-  const combinedSeq = firstSeq + secondSeq;
+
+  // Decode both Uint8Array sequences (oriented) and concatenate as string for paired display
+  const firstStr  = decodeRead({ seqBytes: firstSeq,  orientation: first.orientation });
+  const secondStr = decodeRead({ seqBytes: secondSeq, orientation: second.orientation });
+  const combinedSeq = firstStr + secondStr;
+
   const lastJunc    = junctions[junctions.length - 1];
 
   return {
@@ -80,6 +92,22 @@ export function buildRows(entries, safeWindowStart, windowEnd, regionLen) {
   const rows = [];
 
   for (const m of entries) {
+    // seq may be Uint8Array (single read) or string (paired combined)
+    const isBytes = m.seq instanceof Uint8Array;
+
+    const charAt = isBytes
+      ? (i) => (m.seq[i] != null ? DECODE_CHAR[m.seq[i]] : " ")
+      : (i) => m.seq[i] ?? " ";
+
+    const sliceStr = isBytes
+      ? (start, end) => {
+          const sub = m.seq.subarray(start, end);
+          const out = new Array(sub.length);
+          for (let k = 0; k < sub.length; k++) out[k] = DECODE_CHAR[sub[k]];
+          return out.join("");
+        }
+      : (start, end) => m.seq.slice(start, end);
+
     if (m.junctions?.length) {
       const defaultBridge = m.bridgeChar ?? "=";
       const placements = [];
@@ -92,7 +120,7 @@ export function buildRows(entries, safeWindowStart, windowEnd, regionLen) {
         const visEnd   = Math.min(segGEnd, windowEnd);
         for (let gi = visStart; gi < visEnd; gi++) {
           const readIdx = seg.readStart + (gi - seg.gStart);
-          placements.push([gi - safeWindowStart, m.seq[readIdx] ?? " "]);
+          placements.push([gi - safeWindowStart, charAt(readIdx)]);
         }
 
         // Bridge to next segment — use per-segment bridgeAfter if set, else entry default
@@ -135,7 +163,7 @@ export function buildRows(entries, safeWindowStart, windowEnd, regionLen) {
       const offset = Math.max(0, m.start - safeWindowStart);
       const clipStart = Math.max(0, safeWindowStart - m.start);
       const clipEnd = Math.min(m.seq.length, windowEnd - m.start);
-      const clippedSeq = m.seq.slice(clipStart, clipEnd);
+      const clippedSeq = sliceStr(clipStart, clipEnd);
 
       if (!clippedSeq.length) continue;
 

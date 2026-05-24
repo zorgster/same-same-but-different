@@ -1,6 +1,29 @@
 import { buildRows, normalizeSingleRead, normalizePairedEntry } from "./pileupLogic.js";
 import { COLORS } from "../../styles/light-theme.js";
 
+function pngToJpeg(dataUrl, quality = 0.92) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width  = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+      resolve(canvas.toDataURL("image/jpeg", quality));
+    };
+    img.src = dataUrl;
+  });
+}
+
+function blendWithWhite(hex, alpha) {
+  const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
+  const rr = Math.round(255 + (r - 255) * alpha), gg = Math.round(255 + (g - 255) * alpha), bb = Math.round(255 + (b - 255) * alpha);
+  return `#${rr.toString(16).padStart(2, "0")}${gg.toString(16).padStart(2, "0")}${bb.toString(16).padStart(2, "0")}`;
+}
+
 const NUCLEOTIDE_COLORS = {
   A: "#2ca02c",
   C: "#1f77b4",
@@ -99,7 +122,7 @@ function buildCompressedScale(exonIntervals, exonPxPerBp, intronPx, minExonPx = 
 function computeCoverage(matchingReads, geneLen, readLength) {
   const diff = new Int32Array(geneLen + 1);
   for (const r of matchingReads) {
-    const pos = r.position ?? r.positions?.[0];
+    const pos = r.position;
     if (pos == null || pos < 0 || pos >= geneLen) continue;
     diff[pos]++;
     diff[Math.min(geneLen, pos + readLength)]--;
@@ -182,19 +205,19 @@ function renderRnaOverviewCanvas({
   const pairPlans = [];
   for (const p of (validatedPairs || [])) {
     const { r1, r2 } = p;
-    const r1Pos = r1?.position ?? r1?.positions?.[0];
-    const r2Pos = r2?.position ?? r2?.positions?.[0];
+    const r1Pos = r1?.position;
+    const r2Pos = r2?.position;
     if (r1Pos == null || r2Pos == null) continue;
     const x1s = scale(r1Pos);
-    const x1e = scale(r1Pos + (r1.read?.length ?? readLength));
+    const x1e = scale(r1Pos + (r1.seqBytes?.length ?? readLength));
     const x2s = scale(r2Pos);
-    const x2e = scale(r2Pos + (r2.read?.length ?? readLength));
+    const x2e = scale(r2Pos + (r2.seqBytes?.length ?? readLength));
     const row  = placeAt(Math.min(x1s, x2s), Math.max(x1e, x2e));
     const [lEnd, rStart] = x1e < x2s ? [x1e, x2s] : [x2e, x1s];
     pairPlans.push({
       row, x1s, x1e, x2s, x2e,
-      c1: r1.orientation === "forward" ? FORWARD_COLOR : REVERSE_COLOR,
-      c2: r2.orientation === "forward" ? FORWARD_COLOR : REVERSE_COLOR,
+      c1: r1.orientation === 1 ? FORWARD_COLOR : REVERSE_COLOR,
+      c2: r2.orientation === 1 ? FORWARD_COLOR : REVERSE_COLOR,
       hasInsert: rStart > lEnd, lEnd, rStart,
     });
   }
@@ -204,7 +227,7 @@ function renderRnaOverviewCanvas({
     ...(matchingReads || []).map(r => ({ r, grey: false })),
     ...(greyedR1Reads || []).map(r => ({ r, grey: true })),
   ]) {
-    const color = grey ? "#cccccc" : (r.orientation === "forward" ? FORWARD_COLOR : REVERSE_COLOR);
+    const color = grey ? "#cccccc" : (r.orientation === 1 ? FORWARD_COLOR : REVERSE_COLOR);
     if (r.junctions?.length) {
       const firstJ = r.junctions[0];
       const lastJ  = r.junctions[r.junctions.length - 1];
@@ -216,10 +239,10 @@ function renderRnaOverviewCanvas({
       }));
       singlePlans.push({ type: "junction", row, color, grey, segs });
     } else {
-      const pos = r.position ?? r.positions?.[0];
+      const pos = r.position;
       if (pos == null) continue;
       const xS = scale(pos);
-      const xE = scale(pos + (r.read?.length ?? readLength));
+      const xE = scale(pos + (r.seqBytes?.length ?? readLength));
       singlePlans.push({ type: "simple", row: placeAt(xS, xE), color, grey, xS, xE });
     }
   }
@@ -494,7 +517,7 @@ function getReadsForTranscript(t, geneInfo, matchingReads, validatedPairs, readL
   };
 
   const txReads = (matchingReads || []).filter(r => {
-    const pos = r.position ?? r.positions?.[0];
+    const pos = r.position;
     if (pos == null) return false;
 
     if (r.junctions?.length > 1) {
@@ -512,21 +535,21 @@ function getReadsForTranscript(t, geneInfo, matchingReads, validatedPairs, readL
       return r.junctions.some(j => overlapsExon(j.gStart, j.readEnd - j.readStart));
     }
 
-    if (overlapsExon(pos, r.read?.length ?? readLength)) return true;
+    if (overlapsExon(pos, r.seqBytes?.length ?? readLength)) return true;
     return r.junctions?.some(j => overlapsExon(j.gStart, j.readEnd - j.readStart)) ?? false;
   });
 
   const txPairs = (validatedPairs || []).filter(p => {
-    const r1Pos = p.r1?.position ?? p.r1?.positions?.[0];
-    const r2Pos = p.r2?.position ?? p.r2?.positions?.[0];
-    return (r1Pos != null && overlapsExon(r1Pos, p.r1?.read?.length ?? readLength))
-        || (r2Pos != null && overlapsExon(r2Pos, p.r2?.read?.length ?? readLength));
+    const r1Pos = p.r1?.position;
+    const r2Pos = p.r2?.position;
+    return (r1Pos != null && overlapsExon(r1Pos, p.r1?.seqBytes?.length ?? readLength))
+        || (r2Pos != null && overlapsExon(r2Pos, p.r2?.seqBytes?.length ?? readLength));
   });
 
   return { txReads, txPairs };
 }
 
-function renderPerTranscriptCanvas({ transcript: t, geneInfo, geneSequence, txReads, txPairs, readLength }) {
+function preparePerTranscriptLayout({ transcript: t, geneInfo, geneSequence, txReads, txPairs, readLength, CW }) {
   const geneLen = geneSequence.length;
   const minus   = geneInfo?.strand === -1;
   const toG     = (cs, ce) => minus
@@ -539,23 +562,17 @@ function renderPerTranscriptCanvas({ transcript: t, geneInfo, geneSequence, txRe
     .sort((a, b) => a.gStart - b.gStart);
   if (!exonIntervals.length) return null;
 
-  const totalExonBp = exonIntervals.reduce((s, e) => s + (e.gEnd - e.gStart), 0);
+  const totalExonBp = exonIntervals.reduce((acc, e) => acc + (e.gEnd - e.gStart), 0);
   const exonPxPerBp = Math.max(0.5, Math.min(12, 1400 / Math.max(1, totalExonBp)));
   const INTRON_PX   = 24;
   const MIN_EXON_PX = 16;
   const { scale, totalWidth, breaks, exonW } = buildCompressedScale(exonIntervals, exonPxPerBp, INTRON_PX, MIN_EXON_PX, 12);
 
-  const LABEL_H = 16;
-  const COV_H   = 36;
-  const GAP     = 3;
-  const SCALE   = 2;
-
-  // Normalize read bar height so all transcript views render reads at the same
-  // physical size in the PDF regardless of canvas width (A4 landscape, 273mm content)
-  const ROW_H   = Math.max(3, Math.round(1.4 * totalWidth / 273));
+  const LABEL_H = 16, COV_H = 36, GAP = 3;
+  const ROW_H   = Math.max(2, Math.round(1.4 * totalWidth / 273) - 2);
   const ROW_GAP = Math.max(1, Math.round(ROW_H * 0.35));
 
-  // Pre-placement pass — size canvas to fit all reads exactly
+  // Shared row-placement state — filled in priority order so top rows go to prime evidence
   const rowRanges = [];
   const placeAt = (xStart, xEnd) => {
     const w = Math.max(2, xEnd - xStart);
@@ -569,199 +586,205 @@ function renderPerTranscriptCanvas({ transcript: t, geneInfo, geneSequence, txRe
     return rowRanges.length - 1;
   };
 
+  // Priority 1: spliced reads (strongest transcript evidence) — most junctions first
+  const splicedPlans = [];
+  const splicedReads = txReads
+    .filter(r => r.junctions?.length > 0)
+    .sort((a, b) => (b.junctions?.length ?? 0) - (a.junctions?.length ?? 0));
+  for (const r of splicedReads) {
+    const firstJ = r.junctions[0];
+    const lastJ  = r.junctions[r.junctions.length - 1];
+    const row    = placeAt(scale(firstJ.gStart), scale(lastJ.gStart + (lastJ.readEnd - lastJ.readStart)));
+    splicedPlans.push({
+      row,
+      color: r.orientation === 1 ? FORWARD_COLOR : REVERSE_COLOR,
+      segs: r.junctions.map((j, i) => ({
+        jX1: scale(j.gStart),
+        jX2: scale(j.gStart + (j.readEnd - j.readStart)),
+        arcTo: i + 1 < r.junctions.length ? scale(r.junctions[i + 1].gStart) : null,
+      })),
+    });
+  }
+
+  // Priority 2: validated pairs
   const pairPlans = [];
-  for (const p of txPairs) {
+  for (const p of (txPairs || [])) {
     const { r1, r2 } = p;
-    const r1Pos = r1?.position ?? r1?.positions?.[0];
-    const r2Pos = r2?.position ?? r2?.positions?.[0];
+    const r1Pos = r1?.position, r2Pos = r2?.position;
     if (r1Pos == null || r2Pos == null) continue;
     const x1s = scale(r1Pos);
-    const x1e = scale(r1Pos + (r1.read?.length ?? readLength));
+    const x1e = scale(r1Pos + (r1.seqBytes?.length ?? readLength));
     const x2s = scale(r2Pos);
-    const x2e = scale(r2Pos + (r2.read?.length ?? readLength));
+    const x2e = scale(r2Pos + (r2.seqBytes?.length ?? readLength));
     const row  = placeAt(Math.min(x1s, x2s), Math.max(x1e, x2e));
     const [lEnd, rStart] = x1e < x2s ? [x1e, x2s] : [x2e, x1s];
     pairPlans.push({
       row, x1s, x1e, x2s, x2e,
-      c1: r1.orientation === "forward" ? FORWARD_COLOR : REVERSE_COLOR,
-      c2: r2.orientation === "forward" ? FORWARD_COLOR : REVERSE_COLOR,
+      c1: r1.orientation === 1 ? FORWARD_COLOR : REVERSE_COLOR,
+      c2: r2.orientation === 1 ? FORWARD_COLOR : REVERSE_COLOR,
       hasInsert: rStart > lEnd, lEnd, rStart,
     });
   }
 
+  // Priority 3: unspliced / single reads
   const singlePlans = [];
   for (const r of txReads) {
-    const color = r.orientation === "forward" ? FORWARD_COLOR : REVERSE_COLOR;
-    if (r.junctions?.length) {
-      const firstJ = r.junctions[0];
-      const lastJ  = r.junctions[r.junctions.length - 1];
-      const row    = placeAt(scale(firstJ.gStart), scale(lastJ.gStart + (lastJ.readEnd - lastJ.readStart)));
-      const segs   = r.junctions.map((j, i) => ({
-        jX1: scale(j.gStart),
-        jX2: scale(j.gStart + (j.readEnd - j.readStart)),
-        arcTo: i + 1 < r.junctions.length ? scale(r.junctions[i + 1].gStart) : null,
-      }));
-      singlePlans.push({ type: "junction", row, color, segs });
-    } else {
-      const pos = r.position ?? r.positions?.[0];
-      if (pos == null) continue;
-      const xS = scale(pos);
-      const xE = scale(pos + (r.read?.length ?? readLength));
-      singlePlans.push({ type: "simple", row: placeAt(xS, xE), color, xS, xE });
-    }
+    if (r.junctions?.length > 0) continue;
+    const pos = r.position;
+    if (pos == null) continue;
+    const xS = scale(pos);
+    const xE = scale(pos + (r.seqBytes?.length ?? readLength));
+    singlePlans.push({ row: placeAt(xS, xE), color: r.orientation === 1 ? FORWARD_COLOR : REVERSE_COLOR, xS, xE });
   }
 
   const STRIP_H = Math.max(1, rowRanges.length) * (ROW_H + ROW_GAP) + 4;
   const canvasH = LABEL_H + COV_H + GAP + STRIP_H + 4;
+  const s       = CW / totalWidth;   // px → mm uniform scale
+  const txMmH   = canvasH * s;
 
-  const canvas = document.createElement("canvas");
-  canvas.width  = totalWidth * SCALE;
-  canvas.height = canvasH   * SCALE;
-  const ctx = canvas.getContext("2d");
-  ctx.scale(SCALE, SCALE);
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, totalWidth, canvasH);
-
-  // Intron bands
-  for (let i = 0; i < breaks.length; i++) {
-    const b      = breaks[i];
-    const bW     = exonW(b);
-    const bandStart = b.canvasX + bW;
-    const bandEnd   = i + 1 < breaks.length ? breaks[i + 1].canvasX : bandStart + INTRON_PX;
-    const iLen      = i + 1 < exonIntervals.length
-      ? exonIntervals[i + 1].gStart - exonIntervals[i].gEnd : 0;
-    ctx.fillStyle = INTRON_BG;
-    ctx.fillRect(bandStart, LABEL_H, bandEnd - bandStart, canvasH - LABEL_H);
-    if (iLen > 0 && bandEnd > bandStart + 4) {
-      ctx.fillStyle = INTRON_LABEL_FG;
-      ctx.font = "8px sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "top";
-      const lbl = iLen >= 1000 ? `${(iLen / 1000).toFixed(1)}k` : `${iLen}`;
-      ctx.fillText(lbl, (bandStart + bandEnd) / 2, LABEL_H + 2);
-    }
-  }
-  // Leading intron band
-  if (breaks.length && breaks[0].canvasX > 12) {
-    ctx.fillStyle = INTRON_BG;
-    ctx.fillRect(12, LABEL_H, breaks[0].canvasX - 12, canvasH - LABEL_H);
-  }
-
-  // Coordinate labels
-  ctx.fillStyle = "#555555";
-  ctx.font = "9px monospace";
-  ctx.textAlign = "left";
-  ctx.textBaseline = "middle";
-  for (const b of breaks) {
-    const chromPos = minus
-      ? (geneInfo.end || 0) - b.gStart
-      : (geneInfo.start || 0) + b.gStart;
-    ctx.fillText(String(chromPos), b.canvasX, LABEL_H / 2);
-  }
-
-  // Coverage histogram
   const coverage = computeCoverage(txReads, geneLen, readLength);
   let maxCov = 1;
   for (let i = 0; i < coverage.length; i++) if (coverage[i] > maxCov) maxCov = coverage[i];
 
-  for (const b of breaks) {
-    const bW       = exonW(b);
-    const binCount = Math.ceil(bW);
-    const exonBp   = b.gEnd - b.gStart;
-    ctx.beginPath();
-    for (let bx = 0; bx <= binCount; bx++) {
-      const gs  = b.gStart + Math.floor((bx / binCount) * exonBp);
-      const ge  = b.gStart + Math.floor(((bx + 1) / binCount) * exonBp);
-      let sum = 0;
-      for (let i = gs; i < ge && i < geneLen; i++) sum += coverage[i];
-      const avg = sum / Math.max(1, ge - gs);
-      const y   = LABEL_H + COV_H - Math.round((avg / maxCov) * (COV_H - 4));
-      bx === 0 ? ctx.moveTo(b.canvasX + bx, y) : ctx.lineTo(b.canvasX + bx, y);
+  function draw(doc, x0, y0) {
+    const stripY = LABEL_H + COV_H + GAP;
+
+    const fwdBlend75  = blendWithWhite(FORWARD_COLOR, 0.75);
+    const revBlend75  = blendWithWhite(REVERSE_COLOR, 0.75);
+    const fwdBlend90  = blendWithWhite(FORWARD_COLOR, 0.9);
+    const revBlend90  = blendWithWhite(REVERSE_COLOR, 0.9);
+    const insertColor = blendWithWhite("#888888", 0.7);
+    const covFill     = blendWithWhite(FORWARD_COLOR, 0.157);
+
+    // White background
+    doc.setFillColor("#ffffff");
+    doc.rect(x0, y0, CW, txMmH, "F");
+
+    // Intron bands + labels
+    for (let i = 0; i < breaks.length; i++) {
+      const b         = breaks[i];
+      const bW        = exonW(b);
+      const bandStart = b.canvasX + bW;
+      const bandEnd   = i + 1 < breaks.length ? breaks[i + 1].canvasX : bandStart + INTRON_PX;
+      const iLen      = i + 1 < exonIntervals.length
+        ? exonIntervals[i + 1].gStart - exonIntervals[i].gEnd : 0;
+      doc.setFillColor(INTRON_BG);
+      doc.rect(x0 + bandStart * s, y0 + LABEL_H * s, (bandEnd - bandStart) * s, (canvasH - LABEL_H) * s, "F");
+      if (iLen > 0 && bandEnd > bandStart + 4) {
+        const lbl = iLen >= 1000 ? `${(iLen / 1000).toFixed(1)}k` : `${iLen}`;
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(5);
+        doc.setTextColor(170, 170, 170);
+        doc.text(lbl, x0 + ((bandStart + bandEnd) / 2) * s, y0 + (LABEL_H + 2) * s, { align: "center", baseline: "top" });
+      }
     }
-    ctx.strokeStyle = FORWARD_COLOR;
-    ctx.lineWidth   = 1;
-    ctx.stroke();
 
-    ctx.beginPath();
-    ctx.moveTo(b.canvasX, LABEL_H + COV_H);
-    for (let bx = 0; bx <= binCount; bx++) {
-      const gs  = b.gStart + Math.floor((bx / binCount) * exonBp);
-      const ge  = b.gStart + Math.floor(((bx + 1) / binCount) * exonBp);
-      let sum = 0;
-      for (let i = gs; i < ge && i < geneLen; i++) sum += coverage[i];
-      const avg = sum / Math.max(1, ge - gs);
-      const y   = LABEL_H + COV_H - Math.round((avg / maxCov) * (COV_H - 4));
-      ctx.lineTo(b.canvasX + bx, y);
+    // Leading intron band
+    if (breaks.length && breaks[0].canvasX > 12) {
+      doc.setFillColor(INTRON_BG);
+      doc.rect(x0 + 12 * s, y0 + LABEL_H * s, (breaks[0].canvasX - 12) * s, (canvasH - LABEL_H) * s, "F");
     }
-    ctx.lineTo(b.canvasX + bW, LABEL_H + COV_H);
-    ctx.closePath();
-    ctx.fillStyle = FORWARD_COLOR + "28";
-    ctx.fill();
-  }
-  if (maxCov > 1) {
-    ctx.fillStyle = "#888";
-    ctx.font = "8px monospace";
-    ctx.textAlign = "left";
-    ctx.textBaseline = "top";
-    ctx.fillText(`max ${maxCov}`, 2, LABEL_H + 2);
-  }
 
-  // Read density strip — draw from pre-computed placements (no row cap)
-  const stripY = LABEL_H + COV_H + GAP;
-
-  const drawRead = (xStart, xEnd, color, row, alpha) => {
-    const ry = stripY + row * (ROW_H + ROW_GAP);
-    ctx.globalAlpha = alpha;
-    ctx.fillStyle   = color;
-    ctx.fillRect(xStart, ry, Math.max(2, xEnd - xStart), ROW_H);
-    ctx.globalAlpha = 1;
-    return ry;
-  };
-
-  for (const plan of pairPlans) {
-    const ry = drawRead(plan.x1s, plan.x1e, plan.c1, plan.row, 0.75);
-    drawRead(plan.x2s, plan.x2e, plan.c2, plan.row, 0.75);
-    if (plan.hasInsert) {
-      ctx.globalAlpha = 0.7;
-      ctx.setLineDash([3, 3]);
-      ctx.strokeStyle = "#888888";
-      ctx.lineWidth   = 1;
-      ctx.beginPath(); ctx.moveTo(plan.lEnd, ry + ROW_H / 2); ctx.lineTo(plan.rStart, ry + ROW_H / 2); ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.globalAlpha = 1;
+    // Coordinate labels
+    doc.setFont("courier", "normal");
+    doc.setFontSize(6);
+    doc.setTextColor(85, 85, 85);
+    for (const b of breaks) {
+      const chromPos = minus
+        ? (geneInfo.end || 0) - b.gStart
+        : (geneInfo.start || 0) + b.gStart;
+      doc.text(String(chromPos), x0 + b.canvasX * s, y0 + (LABEL_H / 2) * s, { align: "left", baseline: "middle" });
     }
-  }
 
-  for (const plan of singlePlans) {
-    const ry = stripY + plan.row * (ROW_H + ROW_GAP);
-    if (plan.type === "junction") {
+    // Coverage — thin fill rects + stroke polyline per exon
+    doc.setLineWidth(0.15);
+    doc.setDrawColor(FORWARD_COLOR);
+    for (const b of breaks) {
+      const bW       = exonW(b);
+      const binCount = Math.ceil(bW);
+      const exonBp   = b.gEnd - b.gStart;
+      let prevPt = null;
+      for (let bx = 0; bx <= binCount; bx++) {
+        const gs = b.gStart + Math.floor((bx / binCount) * exonBp);
+        const ge = b.gStart + Math.floor(((bx + 1) / binCount) * exonBp);
+        let sum  = 0;
+        for (let i = gs; i < ge && i < geneLen; i++) sum += coverage[i];
+        const avg    = sum / Math.max(1, ge - gs);
+        const yTop   = LABEL_H + COV_H - Math.round((avg / maxCov) * (COV_H - 4));
+        const x_mm   = x0 + (b.canvasX + bx) * s;
+        const yTop_mm = y0 + yTop * s;
+        const yBot_mm = y0 + (LABEL_H + COV_H) * s;
+        if (yBot_mm > yTop_mm) {
+          doc.setFillColor(covFill);
+          doc.rect(x_mm, yTop_mm, s, yBot_mm - yTop_mm, "F");
+        }
+        if (prevPt) doc.line(prevPt[0], prevPt[1], x_mm, yTop_mm);
+        prevPt = [x_mm, yTop_mm];
+      }
+    }
+
+    if (maxCov > 1) {
+      doc.setFont("courier", "normal");
+      doc.setFontSize(5);
+      doc.setTextColor(136, 136, 136);
+      doc.text(`max ${maxCov}`, x0 + 2 * s, y0 + (LABEL_H + 2) * s, { align: "left", baseline: "top" });
+    }
+
+    // Spliced reads (junction arcs) — top rows
+    doc.setLineWidth(0.25);
+    for (const plan of splicedPlans) {
+      const ry      = stripY + plan.row * (ROW_H + ROW_GAP);
+      const blended = plan.color === FORWARD_COLOR ? fwdBlend90 : revBlend90;
+      doc.setFillColor(blended);
+      doc.setDrawColor(blended);
       for (const seg of plan.segs) {
-        drawRead(seg.jX1, seg.jX2, plan.color, plan.row, 0.9);
+        const segW = Math.max(s * 0.5, (seg.jX2 - seg.jX1) * s);
+        doc.rect(x0 + seg.jX1 * s, y0 + ry * s, segW, ROW_H * s, "F");
         if (seg.arcTo != null) {
-          ctx.globalAlpha = 1.0;
-          ctx.strokeStyle = plan.color;
-          ctx.lineWidth   = 1.5;
-          ctx.beginPath(); ctx.moveTo(seg.jX2, ry + ROW_H / 2); ctx.lineTo(seg.arcTo, ry + ROW_H / 2); ctx.stroke();
-          ctx.globalAlpha = 1;
+          doc.line(x0 + seg.jX2 * s, y0 + (ry + ROW_H / 2) * s, x0 + seg.arcTo * s, y0 + (ry + ROW_H / 2) * s);
         }
       }
-    } else {
-      drawRead(plan.xS, plan.xE, plan.color, plan.row, 0.75);
     }
+
+    // Validated pairs
+    for (const plan of pairPlans) {
+      const ry = stripY + plan.row * (ROW_H + ROW_GAP);
+      doc.setFillColor(plan.c1 === FORWARD_COLOR ? fwdBlend75 : revBlend75);
+      doc.rect(x0 + plan.x1s * s, y0 + ry * s, Math.max(s * 0.5, (plan.x1e - plan.x1s) * s), ROW_H * s, "F");
+      doc.setFillColor(plan.c2 === FORWARD_COLOR ? fwdBlend75 : revBlend75);
+      doc.rect(x0 + plan.x2s * s, y0 + ry * s, Math.max(s * 0.5, (plan.x2e - plan.x2s) * s), ROW_H * s, "F");
+      if (plan.hasInsert) {
+        doc.setLineDashPattern([0.5, 0.5], 0);
+        doc.setDrawColor(insertColor);
+        doc.setLineWidth(0.15);
+        doc.line(x0 + plan.lEnd * s, y0 + (ry + ROW_H / 2) * s, x0 + plan.rStart * s, y0 + (ry + ROW_H / 2) * s);
+        doc.setLineDashPattern([], 0);
+      }
+    }
+
+    // Unspliced / single reads
+    for (const plan of singlePlans) {
+      const ry = stripY + plan.row * (ROW_H + ROW_GAP);
+      doc.setFillColor(plan.color === FORWARD_COLOR ? fwdBlend75 : revBlend75);
+      doc.rect(x0 + plan.xS * s, y0 + ry * s, Math.max(s * 0.5, (plan.xE - plan.xS) * s), ROW_H * s, "F");
+    }
+
+    // Exon boundary ticks
+    doc.setDrawColor("#cccccc");
+    doc.setLineWidth(0.15);
+    doc.setLineDashPattern([], 0);
+    for (const b of breaks) {
+      for (const px_x of [b.canvasX, b.canvasX + exonW(b)]) {
+        doc.line(x0 + px_x * s, y0 + LABEL_H * s, x0 + px_x * s, y0 + txMmH);
+      }
+    }
+
+    // Reset graphics state
+    doc.setTextColor(0, 0, 0);
+    doc.setLineWidth(0.2);
   }
 
-  // Exon boundary ticks
-  ctx.strokeStyle = "#cccccc";
-  ctx.lineWidth   = 0.5;
-  for (const b of breaks) {
-    const x1 = b.canvasX;
-    const x2 = b.canvasX + exonW(b);
-    for (const x of [x1, x2]) {
-      ctx.beginPath(); ctx.moveTo(x, LABEL_H); ctx.lineTo(x, canvasH); ctx.stroke();
-    }
-  }
-
-  return canvas;
+  return { txMmH, draw };
 }
 
 // ── Zoom window pileup canvas ─────────────────────────────────────────────────
@@ -891,9 +914,9 @@ export async function exportOverviewPdf({
 }) {
   const { jsPDF } = await import("jspdf");
 
-  const MARGIN = 12;
+  const MARGIN = 5;
   const isRna  = seqMode === "RNA";
-  const doc    = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  const doc    = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4", compress: true });
   const PW     = 297;
   const PH     = 210;
   const CW     = PW - 2 * MARGIN;
@@ -936,7 +959,7 @@ export async function exportOverviewPdf({
   // CoverageOverview canvas (both modes)
   if (coverageDataUrl && coverageDimensions?.w && coverageDimensions?.h) {
     const imgH = Math.min(80, CW * (coverageDimensions.h / coverageDimensions.w));
-    doc.addImage(coverageDataUrl, "PNG", MARGIN, y, CW, imgH);
+    doc.addImage(await pngToJpeg(coverageDataUrl), "JPEG", MARGIN, y, CW, imgH);
     y += imgH + 4;
   }
 
@@ -948,10 +971,10 @@ export async function exportOverviewPdf({
       transcripts: coverageTranscripts || null, txEvidence: txEvidence || null, readLength,
     });
     if (stripCanvas) {
-      const stripDataUrl = stripCanvas.toDataURL("image/png");
+      const stripDataUrl = stripCanvas.toDataURL("image/jpeg", 0.92);
       const stripMmH     = CW * (stripCanvas.height / stripCanvas.width);
       if (y + stripMmH > PH - MARGIN) { doc.addPage(); y = MARGIN; }
-      doc.addImage(stripDataUrl, "PNG", MARGIN, y, CW, Math.min(stripMmH, PH - y - MARGIN));
+      doc.addImage(stripDataUrl, "JPEG", MARGIN, y, CW, Math.min(stripMmH, PH - y - MARGIN));
       y += Math.min(stripMmH, PH - y - MARGIN) + 2;
       doc.setFontSize(7);
       doc.setTextColor(140, 140, 140);
@@ -996,18 +1019,15 @@ export async function exportOverviewPdf({
     for (const t of sortedTx) {
       const ev = txEvidence?.get(t.id) ?? null;
       const { txReads, txPairs } = getReadsForTranscript(t, geneInfo, matchingReads, validatedPairs, readLength);
-      const txCanvas = renderPerTranscriptCanvas({ transcript: t, geneInfo, geneSequence, txReads, txPairs, readLength });
-      if (!txCanvas) continue;
+      const layout = preparePerTranscriptLayout({ transcript: t, geneInfo, geneSequence, txReads, txPairs, readLength, CW });
+      if (!layout) continue;
 
-      const txMmH    = CW * (txCanvas.height / txCanvas.width);
-      const HEADER_H = 4;  // tight: header belongs visually to the canvas below it
-      const PRE_GAP  = 7;  // breathing room between previous canvas and this header
-      // Keep header + canvas together — page-break before the header, never between them
+      const { txMmH, draw } = layout;
+      const HEADER_H = 4;
+      const PRE_GAP  = 7;
       if (y + PRE_GAP + HEADER_H + txMmH > PH - MARGIN) { doc.addPage(); y = MARGIN; }
       else { y += PRE_GAP; }
 
-      // Label line: "ENST00000396069.5 [canonical]   73%  63 spliced reads  protein_coding  in filename"
-      //         or: "ENST00000396069.5   No spliced reads  protein_coding"
       doc.setFont("helvetica", "bold"); doc.setFontSize(8);
       const txLabel = `${t.id}${t.isCanonical ? " [canonical]" : ""}`;
       doc.text(txLabel, MARGIN, y);
@@ -1018,7 +1038,7 @@ export async function exportOverviewPdf({
       doc.text(evStr, MARGIN + doc.getTextWidth(txLabel), y);
       y += HEADER_H;
 
-      doc.addImage(txCanvas.toDataURL("image/png"), "PNG", MARGIN, y, CW, txMmH);
+      draw(doc, MARGIN, y);
       y += txMmH;
     }
   }
@@ -1033,15 +1053,15 @@ export async function exportZoomWindowPdf({
   const { jsPDF } = await import("jspdf");
 
   const canvas  = renderPileupWindowCanvas({ windowStart, windowEnd, geneSequence, geneInfo, matchingReads, validatedPairs, greyedR1 });
-  const dataUrl = canvas.toDataURL("image/png");
+  const dataUrl = canvas.toDataURL("image/jpeg", 0.97);
 
-  const MARGIN = 12;
+  const MARGIN = 5;
   // Choose orientation so image fits without scaling below legibility
   const portraitW  = 210 - 2 * MARGIN;
   const portraitH  = portraitW * (canvas.height / canvas.width);
   const orientation = portraitH <= 297 - 2 * MARGIN - 20 ? "portrait" : "landscape";
 
-  const doc    = new jsPDF({ orientation, unit: "mm", format: "a4" });
+  const doc    = new jsPDF({ orientation, unit: "mm", format: "a4", compress: true });
   const pageW  = orientation === "landscape" ? 297 : 210;
   const pageH  = orientation === "landscape" ? 210 : 297;
   const contW  = pageW - 2 * MARGIN;
@@ -1064,7 +1084,7 @@ export async function exportZoomWindowPdf({
   ); y += 5;
 
   const imgH = Math.min(contH - (y - MARGIN), contW * (canvas.height / canvas.width));
-  doc.addImage(dataUrl, "PNG", MARGIN, y, contW, imgH);
+  doc.addImage(dataUrl, "JPEG", MARGIN, y, contW, imgH);
 
   const geneName = geneInfo?.name || "window";
   doc.save(`fgf-${geneName}-${windowStart}-${windowEnd}.pdf`);

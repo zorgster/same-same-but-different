@@ -39,20 +39,62 @@ export default function MoreInfoWidget() {
               FASTQ Gene Finder is a tool for finding gene matches in FASTQ
               files using randomly generated sparse seed arrays, including
               start-, middle- and end-heavy seeds and whole length coverage
-              seeds. Matches are scored by how many seed arrays they hit, and a
-              pileup view allows visualizing the coverage of matching reads
-              across the gene.
+              seeds. The tool can handle both single- and paired-end DNA or RNA
+              sequences, and is both gene- and transcript- aware.
               <br />
               <br />
-              The pile-up view (in development) can only be displayed if the
-              processing has completed or is aborted.
+              Features:
+              <br />
+              - Randomly generated sparse seed arrays for efficient matching.
+              <br />
+              - Save and load seed arrays for reproducibility and consistency
+              across runs.
+              <br />
+              - DNA Mode: matches reads against the gene sequence.
+              <br />
+              - RNA Mode: splice-aware; matches reads against the gene sequence
+              and all known transcripts (from Ensembl).
+              <br />
+              - Paired-end support: matches read pairs against the gene and
+              transcripts, with separate seed arrays for each read and a
+              combined scoring system.
+              <br />
+              - Asynchronous, multi-worker parallelised processing with
+              pause/resume and abort functionality for responsive UI even on
+              large files.
+              <br />
+              - For small RNA-Seq FASTQ files (&lt; 2x 520MB) and a gene with
+              &lt; 30,000 bases and 36 transcripts, the completed results are
+              displayed in ~1 minute - reaching a rate of around 300,000 reads
+              per second. (2x 2.49GB - in ~ 5-6 minutes) (on an entry level
+              laptop). Larger files and genes could slow down as resources
+              become used up (testing in process).
+              <br />
+              - Export matched reads as CSV.
+              <br />
+              - Coverage overview of matching reads across the gene.
+              <br />
+              - A paged pile-up view of matching reads across the gene.
+              <br />
+              - PDF Export of results and visualisations. For RNA, this includes
+              a visualisation of the gene structure (exons and introns) and
+              transcripts. Also, per-transcript views that show matches that
+              support the exon-exon junctions of each transcript, which can help
+              identify which transcripts are supported by the reads in the FASTQ
+              file.
               <br />
               <br />
-              This approach is not faster than traditional aligners, but can be
-              useful for a quick and visual exploratory analysis of FASTQ files
-              without needing to install anything. It can handle large FASTQ.gz
-              files in a streaming fashion without consuming large amounts of
-              memory.
+              The pile-up view can only be displayed if the processing has
+              completed or is aborted. Bases that differ from the gene sequence
+              are highlighted. Paired reads are separated by a tilda symbol (~).
+              In RNA mode, spliced reads are divided using an equals symobol
+              (=). The pile-up view is paged for performance.
+              <br />
+              <br />
+              This approach is useful for a quick and visual exploratory
+              analysis of FASTQ files without needing to install anything. It
+              can handle large FASTQ.gz files in a streaming fashion without
+              consuming large amounts of memory.
               <br />
               <br />
               1. Select a FASTQ or FASTQ.gz file (single-end or R1 of
@@ -67,7 +109,7 @@ export default function MoreInfoWidget() {
               results as CSV.
               <br />
               5. If processing is complete or aborted, view the pileup of
-              matching reads across the gene. (Indevelopment: may not show all
+              matching reads across the gene. (In development: may not show all
               matches.)
               <br />
               <br />

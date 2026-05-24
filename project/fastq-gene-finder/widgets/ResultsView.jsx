@@ -1,4 +1,5 @@
 import { memo, useMemo, useState } from "react";
+import { decodeRead } from "../utils/seqUtils.js";
 
 const PAGE_SIZE = 100;
 
@@ -27,8 +28,7 @@ const SeedMatchDots = memo(function SeedMatchDots({ seedIds = [], seedArrays = [
   );
 });
 
-const fmtOr = (or) =>
-  or === "forward" ? "+" : or === "reverse" ? "−" : or ?? "";
+const fmtOr = (or) => or === 1 ? "+" : or === 0 ? "−" : "";
 
 /* ============================================================
    COMPONENT: ResultsView
@@ -72,12 +72,12 @@ export default memo(function ResultsView({
           m.readNumber ?? "",
           m.fastqHeaderLine ?? "",
           m.fastqSequenceLine ?? "",
-          m.position ?? m.positions?.[0],
-          m.orientation ?? "",
-          m.score ?? m.scores?.[0],
+          m.position,
+          m.orientation === 1 ? "forward" : m.orientation === 0 ? "reverse" : "",
+          m.score,
           m.source ?? "genomic",
           (m.seedIds || []).join("|"),
-          `"${m.read || ""}"`,
+          `"${decodeRead(m)}"`,
         ];
         if (pairedMode) {
           const pair = pairMap.get(m.index);
@@ -89,11 +89,11 @@ export default memo(function ResultsView({
             const r2 = pair.r2;
             base.push(
               "paired",
-              r2.position ?? r2.positions?.[0] ?? "",
-              r2.orientation ?? "",
-              r2.score ?? r2.scores?.[0] ?? "",
+              r2.position ?? "",
+              r2.orientation === 1 ? "forward" : r2.orientation === 0 ? "reverse" : "",
+              r2.score ?? "",
               pair.insertSize ?? "",
-              `"${r2.read || ""}"`,
+              `"${decodeRead(r2)}"`,
             );
           }
         }
@@ -185,6 +185,8 @@ export default memo(function ResultsView({
               const isUnconfirmed = pairedMode && pair === null;
               const isPaired      = pairedMode && pair != null;
               const rowBg = i % 2 === 0 ? "#fff" : "#f9f9f9";
+              const readStr = decodeRead(m);
+              const r2Str   = isPaired ? decodeRead(pair.r2) : null;
 
               return (
                 <tr
@@ -193,13 +195,13 @@ export default memo(function ResultsView({
                 >
                   <td style={TD("right")}>{m.readNumber ?? "?"}</td>
                   <td style={TD("right")}>{m.fastqSequenceLine ?? "?"}</td>
-                  <td style={TD("right")}>{m.position ?? m.positions?.[0] ?? "?"}</td>
-                  <td style={TD("center")}>{m.score ?? m.scores?.[0] ?? "?"}</td>
+                  <td style={TD("right")}>{m.position ?? "?"}</td>
+                  <td style={TD("center")}>{m.score ?? "?"}</td>
                   <td style={TD("center", { fontWeight: 600 })}>
                     {fmtOr(m.orientation)}
                   </td>
                   <td style={TD("center", { color: "#0a9" })}>
-                    {m.source === "spliced" ? "✓" : ""}
+                    {m.source != null ? "✓" : ""}
                   </td>
                   {pairedMode && (
                     <td style={TD("center", {
@@ -218,10 +220,10 @@ export default memo(function ResultsView({
                     <SeedMatchDots seedIds={m.seedIds || []} seedArrays={seedArrays} />
                   </td>
                   <td style={TD("left", { whiteSpace: "pre", letterSpacing: "0.02em" })}>
-                    <span title={m.read}>{m.read}</span>
+                    <span title={readStr}>{readStr}</span>
                     {isPaired && (
-                      <div style={{ color: "#5a8fb8", marginTop: "1px" }} title={pair.r2.read}>
-                        {pair.r2.read}
+                      <div style={{ color: "#5a8fb8", marginTop: "1px" }}>
+                        {r2Str}
                       </div>
                     )}
                   </td>

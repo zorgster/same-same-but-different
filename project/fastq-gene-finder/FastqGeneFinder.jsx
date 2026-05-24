@@ -422,7 +422,9 @@ function computeSeedStatsAsync(
         // return per-seed stats and topUniqueSamples sorted ascending by count
         resolve({
           perSeedStats,
-          topUniqueSamples: top.slice().sort((a, b) => a.count - b.count),
+          topUniqueSamples: top
+            .map((s) => ({ ...s, sampleKey: decodeNumericKey(s.rawKey, s.keyLen) }))
+            .sort((a, b) => a.count - b.count),
         });
         return;
       }
@@ -455,7 +457,8 @@ function computeSeedStatsAsync(
           considerTop({
             seedId: seed.id,
             seedLabel: seed.label,
-            sampleKey: decodeNumericKey(key, seed.positions.length),
+            rawKey: key,
+            keyLen: seed.positions.length,
             count,
             positions: positions.slice(0, 20),
           });

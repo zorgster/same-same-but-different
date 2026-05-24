@@ -1375,18 +1375,24 @@ export default function FastqGeneFinderApp() {
     display: "flex",
     borderBottom: "2px solid #444",
     marginTop: "1rem",
+    gap: "3px",
+    alignItems: "flex-end",
   };
 
   const tabBtnStyle = (active) => ({
-    padding: "0.4rem 1rem",
-    border: "none",
-    borderBottom: active ? "3px solid #444" : "3px solid transparent",
-    background: active ? "#f0f0f0" : "transparent",
+    padding: "0.35rem 1rem",
+    border: "1px solid",
+    borderColor: active ? "#444" : "#bbb",
+    borderBottom: active ? "2px solid #f5f5f5" : "1px solid #bbb",
+    borderRadius: "4px 4px 0 0",
+    background: active ? "#f5f5f5" : "#e4e4e4",
     fontFamily: "monospace",
     fontSize: "13px",
     fontWeight: active ? 700 : 400,
     cursor: "pointer",
-    marginBottom: "-2px",
+    color: active ? "#222" : "#555",
+    marginBottom: active ? "-2px" : "-1px",
+    position: "relative",
   });
 
   const dropzoneAccept = {

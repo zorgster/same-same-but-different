@@ -387,101 +387,45 @@ function computeTxIndexStats(indices, exonMaps, transcripts) {
   }));
 }
 
-// Non-blocking, memory-friendly seed stats collector
-function computeSeedStatsAsync(
-  seedIndices,
-  seedArrays,
-  topN = 5,
-  chunkSize = 1000,
-) {
-  return new Promise((resolve) => {
-    const perSeedStats = [];
-    const top = []; // keep at most topN items, sorted descending by count
+function computeSeedStats(seedIndices, seedArrays, topN = 5) {
+  const perSeedStats = [];
+  const top = [];
 
-    function considerTop(item) {
+  for (let seedIdx = 0; seedIdx < seedIndices.length; seedIdx++) {
+    const map  = seedIndices[seedIdx];
+    const seed = seedArrays[seedIdx];
+    const stats = {
+      seedId: seed.id,
+      seedLabel: seed.label,
+      distinctSamples: 0,
+      singletonCount: 0,
+      totalAlignments: 0,
+    };
+    perSeedStats.push(stats);
+
+    for (const [key, positions] of map) {
+      const count = positions.length;
+      stats.distinctSamples++;
+      stats.totalAlignments += count;
+      if (count === 1) stats.singletonCount++;
+
+      const item = { seedId: seed.id, seedLabel: seed.label, rawKey: key, keyLen: seed.positions.length, count, positions: positions.slice(0, 20) };
       if (top.length < topN) {
         top.push(item);
         top.sort((a, b) => b.count - a.count);
-        return;
-      }
-      // top[0] has largest count; replace only if current count is smaller (more unique)
-      if (
-        item.count < top[0].count ||
-        (item.count === top[0].count && item.seedId < top[0].seedId)
-      ) {
+      } else if (item.count < top[0].count || (item.count === top[0].count && item.seedId < top[0].seedId)) {
         top[0] = item;
         top.sort((a, b) => b.count - a.count);
       }
     }
+  }
 
-    let seedIdx = 0;
-
-    function processNextSeed() {
-      if (seedIdx >= seedIndices.length) {
-        // done
-        // return per-seed stats and topUniqueSamples sorted ascending by count
-        resolve({
-          perSeedStats,
-          topUniqueSamples: top
-            .map((s) => ({ ...s, sampleKey: decodeNumericKey(s.rawKey, s.keyLen) }))
-            .sort((a, b) => a.count - b.count),
-        });
-        return;
-      }
-
-      const map = seedIndices[seedIdx];
-      const seed = seedArrays[seedIdx];
-      const stats = {
-        seedId: seed.id,
-        seedLabel: seed.label,
-        distinctSamples: 0,
-        singletonCount: 0,
-        totalAlignments: 0,
-      };
-      perSeedStats.push(stats);
-
-      const iter = map.entries();
-      let batch = [];
-
-      function processBatch() {
-        let i = 0;
-        for (; i < chunkSize; i++) {
-          const entry = iter.next();
-          if (entry.done) break;
-          const [key, positions] = entry.value;
-          const count = positions.length;
-          stats.distinctSamples++;
-          stats.totalAlignments += count;
-          if (count === 1) stats.singletonCount++;
-
-          considerTop({
-            seedId: seed.id,
-            seedLabel: seed.label,
-            rawKey: key,
-            keyLen: seed.positions.length,
-            count,
-            positions: positions.slice(0, 20),
-          });
-        }
-
-        if (i < chunkSize) {
-          // finished this seed
-          seedIdx++;
-          // yield once before starting next seed
-          setTimeout(processNextSeed, 0);
-        } else {
-          // more to do for current seed; yield then continue
-          setTimeout(processBatch, 0);
-        }
-      }
-
-      // start batch processing for this seed
-      processBatch();
-    }
-
-    // start processing seeds
-    processNextSeed();
-  });
+  return {
+    perSeedStats,
+    topUniqueSamples: top
+      .map((s) => ({ ...s, sampleKey: decodeNumericKey(s.rawKey, s.keyLen) }))
+      .sort((a, b) => a.count - b.count),
+  };
 }
 
 /* ============================================================
@@ -794,7 +738,7 @@ export default function FastqGeneFinderApp() {
         }
 
         setSeedStats({ perSeedStats: [], topUniqueSamples: [] });
-        computeSeedStatsAsync(indicesRef.current, seeds).then(setSeedStats);
+        setSeedStats(computeSeedStats(indicesRef.current, seeds));
         setStatus("ready-to-process");
       } else {
         setSeedArrays([]);
@@ -1511,7 +1455,7 @@ export default function FastqGeneFinderApp() {
           txDataRef.current = spliced ? [spliced] : [];
         }
         setSeedStats({ perSeedStats: [], topUniqueSamples: [] });
-        computeSeedStatsAsync(indicesRef.current, seeds).then(setSeedStats);
+        setSeedStats(computeSeedStats(indicesRef.current, seeds));
       } catch {
         alert("Could not parse seed file.");
       }

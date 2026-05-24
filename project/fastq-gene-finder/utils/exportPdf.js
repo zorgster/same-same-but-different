@@ -1,3 +1,4 @@
+import { jsPDF } from "jspdf";
 import { buildRows, normalizeSingleRead, normalizePairedEntry } from "./pileupLogic.js";
 import { COLORS } from "../../styles/light-theme.js";
 
@@ -912,7 +913,7 @@ export async function exportOverviewPdf({
   coverageDataUrl, coverageDimensions, coverageTranscripts, txEvidence, readLength,
   fileName,
 }) {
-  const { jsPDF } = await import("jspdf");
+
 
   const MARGIN = 5;
   const isRna  = seqMode === "RNA";
@@ -1050,7 +1051,7 @@ export async function exportOverviewPdf({
 export async function exportZoomWindowPdf({
   windowStart, windowEnd, geneSequence, geneInfo, matchingReads, validatedPairs, greyedR1,
 }) {
-  const { jsPDF } = await import("jspdf");
+
 
   const canvas  = renderPileupWindowCanvas({ windowStart, windowEnd, geneSequence, geneInfo, matchingReads, validatedPairs, greyedR1 });
   const dataUrl = canvas.toDataURL("image/jpeg", 0.97);

@@ -1,4 +1,4 @@
-import { DECODE_CHAR, decodeRead } from "./seqUtils.js";
+import { DECODE_CHAR, RC_DECODE_CHAR, decodeRead } from "./seqUtils.js";
 
 export function normalizeSingleRead(m) {
   const seq = m.seqBytes ?? new Uint8Array(0);
@@ -94,18 +94,29 @@ export function buildRows(entries, safeWindowStart, windowEnd, regionLen) {
   for (const m of entries) {
     // seq may be Uint8Array (single read) or string (paired combined)
     const isBytes = m.seq instanceof Uint8Array;
+    const isRC    = isBytes && m.orientation === 0;
+    const n       = isBytes ? m.seq.length : 0;
 
     const charAt = isBytes
-      ? (i) => (m.seq[i] != null ? DECODE_CHAR[m.seq[i]] : " ")
+      ? isRC
+        ? (i) => (m.seq[n - 1 - i] != null ? RC_DECODE_CHAR[m.seq[n - 1 - i]] : " ")
+        : (i) => (m.seq[i] != null ? DECODE_CHAR[m.seq[i]] : " ")
       : (i) => m.seq[i] ?? " ";
 
     const sliceStr = isBytes
-      ? (start, end) => {
-          const sub = m.seq.subarray(start, end);
-          const out = new Array(sub.length);
-          for (let k = 0; k < sub.length; k++) out[k] = DECODE_CHAR[sub[k]];
-          return out.join("");
-        }
+      ? isRC
+        ? (start, end) => {
+            const len = end - start;
+            const out = new Array(len);
+            for (let k = 0; k < len; k++) out[k] = RC_DECODE_CHAR[m.seq[n - 1 - start - k]];
+            return out.join("");
+          }
+        : (start, end) => {
+            const sub = m.seq.subarray(start, end);
+            const out = new Array(sub.length);
+            for (let k = 0; k < sub.length; k++) out[k] = DECODE_CHAR[sub[k]];
+            return out.join("");
+          }
       : (start, end) => m.seq.slice(start, end);
 
     if (m.junctions?.length) {

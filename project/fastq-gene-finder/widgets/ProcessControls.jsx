@@ -208,6 +208,9 @@ export default function ProcessControls({
                     {progress?.total > 0 && progress?.done > 0 &&
                       ` (${Math.min(100, Math.round(progress.done / progress.total * 100))}%)`}
                   </span>
+                  {status === "processing" && progress?.done >= progress?.total && progress?.total > 0 && (
+                    <span style={{ color: COLORS.accent, marginLeft: "0.4rem", fontSize: "11px" }}>flushing…</span>
+                  )}
                 </td>
                 <td style={{ textAlign: "right", paddingRight: "0.75rem", color: COLORS.muted }}>—</td>
                 <td style={{ textAlign: "right", paddingRight: "0.75rem" }}>
@@ -231,6 +234,9 @@ export default function ProcessControls({
                 <span style={{ color: COLORS.muted, marginLeft: "0.5rem" }}>
                   ({Math.min(100, Math.round((progress.done / progress.total) * 100))}%)
                 </span>
+              )}
+              {status === "processing" && progress?.done >= progress?.total && progress?.total > 0 && (
+                <span style={{ color: COLORS.accent, marginLeft: "0.4rem", fontSize: "11px" }}>flushing…</span>
               )}
             </div>
             <div>

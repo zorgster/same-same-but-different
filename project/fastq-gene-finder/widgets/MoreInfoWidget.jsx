@@ -68,7 +68,7 @@ export default function MoreInfoWidget() {
               displayed in ~1 minute - reaching a rate of around 300,000 reads
               per second. (2x 2.49GB - in ~ 5-6 minutes) (on an entry level
               laptop). Larger files and genes could slow down as resources
-              become used up (testing in process).
+              become used up.
               <br />
               - Export matched reads as CSV.
               <br />
@@ -84,33 +84,76 @@ export default function MoreInfoWidget() {
               file.
               <br />
               <br />
+              IMPORTANT NOTE: This in-browser tool is designed for quick and
+              visual exploratory analysis of FASTQ files, and is not intended to
+              be a comprehensive or fully accurate tool for finding all gene
+              matches in a FASTQ file. It uses a local sparse seed-n-vote
+              approach, which is a heuristic method that can be fast and
+              efficient, but may not find all matches or may produce some false
+              positives, especially if the gene sequence is common or has many
+              similar sequences in the FASTQ file. (Some of these issues may be
+              addressed in the future downloadable Rust version of the tool.)
+              <br />
+              <br />
+              Blindspots:
+              <br />
+              - INDELs: Sequences containing indels relative to the reference
+              gene may not be found, because the seed arrays are generated based
+              on the reference gene sequence and do not account for indels.
+              <br />
+              - Splice variants: In RNA mode, reads that support splice variants
+              that are not included in the known transcripts from Ensembl may
+              not be found, because the tool only matches against the reference
+              gene sequence and known transcripts, and does not attempt to
+              discover novel splice variants.
+              <br />
+              - Low-quality reads: Reads with low-quality scores may produce
+              false positives or false negatives, because this seed-n-vote
+              approach does not take quality scores into account when matching
+              reads to the gene.
+              <br />
+              <br />
               The pile-up view can only be displayed if the processing has
               completed or is aborted. Bases that differ from the gene sequence
-              are highlighted. Paired reads are separated by a tilda symbol (~).
-              In RNA mode, spliced reads are divided using an equals symobol
-              (=). The pile-up view is paged for performance.
+              are highlighted. Paired reads are separated by a tilde symbol (~).
+              In RNA mode, spliced reads are divided using an equals symbol (=).
+              The pile-up view is paged for performance.
               <br />
               <br />
-              This approach is useful for a quick and visual exploratory
-              analysis of FASTQ files without needing to install anything. It
-              can handle large FASTQ.gz files in a streaming fashion without
-              consuming large amounts of memory.
+              Usage:
               <br />
               <br />
-              1. Select a FASTQ or FASTQ.gz file (single-end or R1 of
-              paired-end).
+              1. Select a FASTQ or FASTQ.gz file (Select or drop R1 or both R1
+              and R2 on the dropzone).
               <br />
-              2. Enter a gene name to look up its sequence.
+              2. Select DNA or RNA mode.
               <br />
-              3. Click "Process" to find matching reads. You can pause/resume or
+              3. Enter a gene name to look up its sequence.
+              <br />
+              4. Inspect the Seeds tab to see the randomly generated seed
+              arrays, and save them if you want to use the same seeds for
+              another run (e.g. with a different FASTQ file or gene). Or load
+              previously saved seeds to use the same seed arrays as a previous
+              run, for consistency and reproducibility across runs.
+              <br />
+              5. Select the number of workers to use for processing.
+              <br />
+              6. Select the minimum percentage of seeds that must match for a
+              read to be considered a match (e.g. 80% means that at least 80% of
+              the seeds must match). In RNA mode, if a high percentage is
+              selected, then more reads will be tested against the transcripts,
+              which can increase processing time but may give more accurate
+              results.
+              <br />
+              7. Click "Process" to find matching reads. You can pause/resume or
               abort the process while it's running.
               <br />
-              4. View matching reads and their seed match patterns, and export
-              results as CSV.
+              8. View matching reads and their seed match patterns in the
+              Matched Reads tab, and export results as CSV.
               <br />
-              5. If processing is complete or aborted, view the pileup of
-              matching reads across the gene. (In development: may not show all
-              matches.)
+              9. If processing is complete or aborted, view the coverage and
+              pileup of matching reads across the gene in the Pileup tab, and
+              export a PDF report of results and visualisations.
               <br />
               <br />
               Note: Some DNA sequences are common or similar across many genes
@@ -118,15 +161,6 @@ export default function MoreInfoWidget() {
               spurious matches. Try BLASTing the gene sequence to find other
               genes that share similar sequences, and consider filtering those
               out of the FASTQ file before processing for a cleaner analysis.
-              <br />
-              <br />
-              Note: this is a proof-of-concept implementation and is not
-              designed for production use. It is designed to demonstrate (to
-              learners) the concept of sparse seed-n-vote matching. While it is
-              not fully optimised, some effort has been made to keep it
-              responsive and memory-efficient even on large files, by using
-              streaming file reading, pre-indexing the gene sequence for the
-              seed arrays, and computing seed stats asynchronously in batches.
             </div>
 
             <div

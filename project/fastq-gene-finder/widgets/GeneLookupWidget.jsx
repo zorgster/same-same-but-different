@@ -122,6 +122,7 @@ export default function GeneLookupWidget({
             onChange={(e) => setGeneName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && geneName && !loading && handleFetch()}
             placeholder="e.g. BRCA1"
+            maxLength={50}
             style={{ width: "9ch", fontFamily: "monospace" }}
           />
           <button onClick={handleFetch} disabled={!geneName || loading}>

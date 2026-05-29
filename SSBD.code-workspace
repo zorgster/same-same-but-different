@@ -6,6 +6,9 @@
     {
       "path": "../../Rust/FastqReader",
     },
+    {
+      "path": "../../Rust/FastqGeneFinder",
+    },
   ],
   "settings": {
     "editor.formatOnSave": true,

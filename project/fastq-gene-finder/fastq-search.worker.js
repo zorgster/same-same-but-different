@@ -66,7 +66,7 @@ const txEvidence = [];
 self.onmessage = ({ data: { type, payload } }) => {
   if (type === "init") {
     ({ seedArrays, seedIndices, minSeedMatches } = payload);
-    txData = payload.txData ?? [];
+    txData = payload.txData ?? null;
     isAborted = false;
 
     // Build inverted position → [seedId] map (runs once per worker)
@@ -169,64 +169,10 @@ self.onmessage = ({ data: { type, payload } }) => {
         }
       }
 
-      // Spliced fallback — only for reads that had no gene-sequence match.
-      // Combined index (RNA mode): txData = { indices: Map[], exonMaps: Map }
-      // Legacy array (DNA/fallback):  txData = [{txId, indices, exonMap}]
-      if (!hasMatch && txData) {
-        if (Array.isArray(txData) && txData.length) {
-          // Legacy: first-match-wins loop (merged exon-union, one entry)
-          outer: for (const { txId, indices, exonMap } of txData) {
-            fwdScores.clear(); fwdSeedsMap.clear();
-            for (let s = 0; s < numSeeds; s++) {
-              const hits = indices[s].get(readKeysFwd[s]);
-              if (hits) for (const pos of hits) {
-                fwdScores.set(pos, (fwdScores.get(pos) || 0) + 1);
-                const sl = fwdSeedsMap.get(pos);
-                if (sl) sl.push(seedArrays[s].id); else fwdSeedsMap.set(pos, [seedArrays[s].id]);
-              }
-            }
-            for (const [txPos, score] of fwdScores) {
-              if (score >= minSeedMatches) {
-                const gPos = txPosToGenePos(txPos, exonMap);
-                if (gPos != null) {
-                  matches.push({
-                    seqBytes, orientation: 1,
-                    readNumber: index + 1, fastqHeaderLine: index * 4 + 1, fastqSequenceLine: index * 4 + 2,
-                    position: gPos, score,
-                    index, seedIds: fwdSeedsMap.get(txPos) || [], source: txId,
-                    junctions: computeJunctions(txPos, readLen, exonMap),
-                  });
-                  hasMatch = true; break outer;
-                }
-              }
-            }
-            revScores.clear(); revSeedsMap.clear();
-            for (let s = 0; s < numSeeds; s++) {
-              const hits = indices[s].get(readKeysRev[s]);
-              if (hits) for (const pos of hits) {
-                revScores.set(pos, (revScores.get(pos) || 0) + 1);
-                const sl = revSeedsMap.get(pos);
-                if (sl) sl.push(seedArrays[s].id); else revSeedsMap.set(pos, [seedArrays[s].id]);
-              }
-            }
-            for (const [txPos, score] of revScores) {
-              if (score >= minSeedMatches) {
-                const gPos = txPosToGenePos(txPos, exonMap);
-                if (gPos != null) {
-                  matches.push({
-                    seqBytes, orientation: 0,
-                    readNumber: index + 1, fastqHeaderLine: index * 4 + 1, fastqSequenceLine: index * 4 + 2,
-                    position: gPos, score,
-                    index, seedIds: revSeedsMap.get(txPos) || [], source: txId,
-                    junctions: computeJunctions(txPos, readLen, exonMap),
-                  });
-                  hasMatch = true; break outer;
-                }
-              }
-            }
-          }
-        } else if (txData.indices) {
-          // Combined per-transcript index: 13 lookups accumulate scores for all transcripts at once.
+      // Spliced fallback — only for reads that had no gene-sequence match (RNA mode).
+      if (!hasMatch && txData?.indices) {
+        {
+          // Combined per-transcript index: lookups accumulate scores for all transcripts at once.
           const { indices: txIndices, exonMaps } = txData;
 
           // Accumulate per-transcript scores (fwd and rev) — reuse module-level Maps
@@ -236,50 +182,50 @@ self.onmessage = ({ data: { type, payload } }) => {
           for (let s = 0; s < numSeeds; s++) {
             const fwdHit = txIndices[s].get(readKeysFwd[s]);
             if (fwdHit) {
-              for (const [txId, positions] of fwdHit) {
-                txFwdScores.set(txId, (txFwdScores.get(txId) || 0) + 1);
-                if (!txFwdBest.has(txId)) txFwdBest.set(txId, positions[0]);
-                const sl = txFwdSeedIds.get(txId);
-                if (sl) sl.push(seedArrays[s].id); else txFwdSeedIds.set(txId, [seedArrays[s].id]);
+              for (const [txIdx, positions] of fwdHit) {
+                txFwdScores.set(txIdx, (txFwdScores.get(txIdx) || 0) + 1);
+                if (!txFwdBest.has(txIdx)) txFwdBest.set(txIdx, positions[0]);
+                const sl = txFwdSeedIds.get(txIdx);
+                if (sl) sl.push(seedArrays[s].id); else txFwdSeedIds.set(txIdx, [seedArrays[s].id]);
               }
             }
             const revHit = txIndices[s].get(readKeysRev[s]);
             if (revHit) {
-              for (const [txId, positions] of revHit) {
-                txRevScores.set(txId, (txRevScores.get(txId) || 0) + 1);
-                if (!txRevBest.has(txId)) txRevBest.set(txId, positions[0]);
-                const sl = txRevSeedIds.get(txId);
-                if (sl) sl.push(seedArrays[s].id); else txRevSeedIds.set(txId, [seedArrays[s].id]);
+              for (const [txIdx, positions] of revHit) {
+                txRevScores.set(txIdx, (txRevScores.get(txIdx) || 0) + 1);
+                if (!txRevBest.has(txIdx)) txRevBest.set(txIdx, positions[0]);
+                const sl = txRevSeedIds.get(txIdx);
+                if (sl) sl.push(seedArrays[s].id); else txRevSeedIds.set(txIdx, [seedArrays[s].id]);
               }
             }
           }
 
           // Collect all transcripts above threshold; pick best for match
           txEvidence.length = 0;
-          let bestScore = 0, bestTxId = null, bestTxPos = null, bestOrientation = null;
+          let bestScore = 0, bestTxIdx = null, bestTxPos = null, bestOrientation = null;
 
-          for (const [txId, score] of txFwdScores) {
+          for (const [txIdx, score] of txFwdScores) {
             if (score >= minSeedMatches) {
-              txEvidence.push({ txId, score });
+              txEvidence.push({ txIdx, score });
               if (score > bestScore) {
-                bestScore = score; bestTxId = txId;
-                bestTxPos = txFwdBest.get(txId); bestOrientation = 1;
+                bestScore = score; bestTxIdx = txIdx;
+                bestTxPos = txFwdBest.get(txIdx); bestOrientation = 1;
               }
             }
           }
-          for (const [txId, score] of txRevScores) {
+          for (const [txIdx, score] of txRevScores) {
             if (score >= minSeedMatches) {
-              if (!txFwdScores.has(txId) || txFwdScores.get(txId) < minSeedMatches)
-                txEvidence.push({ txId, score });
+              if (!txFwdScores.has(txIdx) || txFwdScores.get(txIdx) < minSeedMatches)
+                txEvidence.push({ txIdx, score });
               if (score > bestScore) {
-                bestScore = score; bestTxId = txId;
-                bestTxPos = txRevBest.get(txId); bestOrientation = 0;
+                bestScore = score; bestTxIdx = txIdx;
+                bestTxPos = txRevBest.get(txIdx); bestOrientation = 0;
               }
             }
           }
 
-          if (bestTxId != null) {
-            const exonMap = exonMaps.get(bestTxId);
+          if (bestTxIdx != null) {
+            const exonMap = exonMaps.get(bestTxIdx);
             const gPos = exonMap ? txPosToGenePos(bestTxPos, exonMap) : null;
             if (gPos != null) {
               matches.push({
@@ -287,8 +233,8 @@ self.onmessage = ({ data: { type, payload } }) => {
                 readNumber: index + 1, fastqHeaderLine: index * 4 + 1, fastqSequenceLine: index * 4 + 2,
                 position: gPos, score: bestScore,
                 index,
-                seedIds: bestOrientation === 1 ? (txFwdSeedIds.get(bestTxId) || []) : (txRevSeedIds.get(bestTxId) || []),
-                source: bestTxId,
+                seedIds: bestOrientation === 1 ? (txFwdSeedIds.get(bestTxIdx) || []) : (txRevSeedIds.get(bestTxIdx) || []),
+                source: bestTxIdx,
                 junctions: computeJunctions(bestTxPos, readLen, exonMap),
                 txEvidence: txEvidence.slice(),
               });

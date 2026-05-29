@@ -249,39 +249,6 @@ function decodeNumericKey(key, len) {
   return s;
 }
 
-function extractExonIntervals(maskedSeq) {
-  const intervals = [];
-  let start = -1;
-  for (let i = 0; i <= maskedSeq.length; i++) {
-    const c = maskedSeq[i];
-    const isExon = c >= "A" && c <= "Z";
-    if (start === -1 && isExon) start = i;
-    else if (start !== -1 && !isExon) {
-      intervals.push({ gStart: start, gEnd: i });
-      start = -1;
-    }
-  }
-  return intervals;
-}
-
-function buildSplicedIndex(intervals, geneSequence, readLength, seedArrays) {
-  let seq = "";
-  const exonMap = [];
-  for (const { gStart, gEnd } of intervals) {
-    exonMap.push({
-      txStart: seq.length,
-      txEnd: seq.length + (gEnd - gStart),
-      gStart,
-    });
-    seq += geneSequence.slice(gStart, gEnd);
-  }
-  if (seq.length < readLength) return null;
-  return {
-    txId: "spliced",
-    indices: buildSeedIndices(seq, readLength, seedArrays),
-    exonMap,
-  };
-}
 
 function buildSeedIndices(geneSequence, readLength, seedArrays) {
   const maxStart = Math.max(0, geneSequence.length - readLength);
@@ -317,7 +284,8 @@ function buildCombinedTxIndex(transcripts, geneSequence, geneInfo, readLength, s
   const indices = seedArrays.map(() => new Map()); // Map<key, Map<txId, txPos[]>>
   const exonMaps = new Map(); // Map<txId, [{txStart, txEnd, gStart}]>
 
-  for (const t of transcripts) {
+  for (let i = 0; i < transcripts.length; i++) {
+    const t = transcripts[i];
     let seq = "";
     const exonMap = [];
     const sortedExons = minus
@@ -330,7 +298,7 @@ function buildCombinedTxIndex(transcripts, geneSequence, geneInfo, readLength, s
       seq += geneSequence.slice(gStart, gEnd);
     }
     if (seq.length < readLength) continue;
-    exonMaps.set(t.id, exonMap);
+    exonMaps.set(i, exonMap);
 
     const maxStart = seq.length - readLength;
     for (let pos = 0; pos <= maxStart; pos++) {
@@ -345,9 +313,9 @@ function buildCombinedTxIndex(transcripts, geneSequence, geneInfo, readLength, s
         if (!ok) continue;
         let keyMap = indices[s].get(key);
         if (!keyMap) { keyMap = new Map(); indices[s].set(key, keyMap); }
-        const txPositions = keyMap.get(t.id);
+        const txPositions = keyMap.get(i);
         if (txPositions) txPositions.push(pos);
-        else keyMap.set(t.id, [pos]);
+        else keyMap.set(i, [pos]);
       }
     }
   }
@@ -357,10 +325,10 @@ function buildCombinedTxIndex(transcripts, geneSequence, geneInfo, readLength, s
 function computeTxIndexStats(indices, exonMaps, transcripts) {
   const numSeeds = indices.length;
   const statsMap = new Map();
-  for (const t of transcripts) {
-    const em = exonMaps.get(t.id);
-    const splicedLen = em?.length ? em[em.length - 1].txEnd : 0;
-    statsMap.set(t.id, {
+  for (const [i, em] of exonMaps) {
+    const t = transcripts[i];
+    const splicedLen = em.length ? em[em.length - 1].txEnd : 0;
+    statsMap.set(i, {
       txId: t.id,
       biotype: t.biotype,
       isCanonical: t.isCanonical,
@@ -371,8 +339,8 @@ function computeTxIndexStats(indices, exonMaps, transcripts) {
   for (let s = 0; s < numSeeds; s++) {
     for (const [, txMap] of indices[s]) {
       const isTxUnique = txMap.size === 1;
-      for (const [txId, positions] of txMap) {
-        const st = statsMap.get(txId);
+      for (const [txIdx, positions] of txMap) {
+        const st = statsMap.get(txIdx);
         if (st) {
           st.perSeed[s].uniqueKeys++;
           st.perSeed[s].totalPositions += positions.length;
@@ -729,12 +697,8 @@ export default function FastqGeneFinderApp() {
           const txData = buildCombinedTxIndex(newTranscripts, sequence, info, readLength, seeds);
           txDataRef.current = txData;
           setTxIndexStats(computeTxIndexStats(txData.indices, txData.exonMaps, newTranscripts));
-        } else if (maskedSeq) {
-          const intervals = extractExonIntervals(maskedSeq);
-          const result = buildSplicedIndex(intervals, sequence, readLength, seeds);
-          txDataRef.current = result ? [result] : [];
         } else {
-          txDataRef.current = [];
+          txDataRef.current = null;
         }
 
         setSeedStats({ perSeedStats: [], topUniqueSamples: [] });
@@ -828,6 +792,7 @@ export default function FastqGeneFinderApp() {
 
     const file = files[0];
     const currentR2File = r2File; // capture for this processing run
+    const currentTranscripts = transcripts;
 
     setStatus("processing");
     setProcessingFinished(false);
@@ -996,14 +961,16 @@ export default function FastqGeneFinderApp() {
           workerBatchDone[i]++;
           if (matches.length > 0) {
             workerMatchFound[i] += matches.length;
-            pendingMatchesRef.current.push(...matches);
-            // Accumulate per-transcript evidence from spliced matches
+            // Translate integer txIdx → ENST string at the display boundary
             const updates = new Map();
             for (const m of matches) {
-              for (const { txId } of (m.txEvidence || [])) {
-                updates.set(txId, (updates.get(txId) || 0) + 1);
+              if (m.source != null) m.source = currentTranscripts[m.source].id;
+              for (const ev of (m.txEvidence || [])) {
+                const txId = currentTranscripts[ev.txIdx]?.id;
+                if (txId) updates.set(txId, (updates.get(txId) || 0) + 1);
               }
             }
+            pendingMatchesRef.current.push(...matches);
             if (updates.size > 0) {
               setTxEvidenceCounts((prev) => {
                 const next = new Map(prev);
@@ -1094,6 +1061,7 @@ export default function FastqGeneFinderApp() {
     workerCount,
     matchThresholdPct,
     r2File,
+    transcripts,
   ]);
 
   /* ---------------- R2 pass (triggered after R1 completes with r2File set) ---------------- */
@@ -1101,6 +1069,7 @@ export default function FastqGeneFinderApp() {
     if (!r2File || !indicesRef.current || !r1MatchMapRef.current) return;
 
     const r2Map = r1MatchMapRef.current;
+    const currentTranscripts = transcripts;
     setStatus("processing-r2");
     setProgress({ done: 0, total: 0, fileName: r2File.name });
     setR2KeptCount(0);
@@ -1216,7 +1185,12 @@ export default function FastqGeneFinderApp() {
         if (data.type === "result") {
           batchesReturnedRef.current++;
           const { matches } = data;
-          if (matches.length > 0) r2Accumulated.push(...matches);
+          if (matches.length > 0) {
+            for (const m of matches) {
+              if (m.source != null) m.source = currentTranscripts[m.source].id;
+            }
+            r2Accumulated.push(...matches);
+          }
           syncR2Display();
           idleWorkersRef.current.push(i);
           drainPendingBatches();
@@ -1289,6 +1263,7 @@ export default function FastqGeneFinderApp() {
     readLength,
     minInsert,
     maxInsert,
+    transcripts,
   ]);
 
   // Trigger R2 pass when R1 completes with an R2 file set.
@@ -1455,10 +1430,8 @@ export default function FastqGeneFinderApp() {
           const txData = buildCombinedTxIndex(transcripts, geneSequence, geneInfo, readLength, seeds);
           txDataRef.current = txData;
           setTxIndexStats(computeTxIndexStats(txData.indices, txData.exonMaps, transcripts));
-        } else if (maskedGeneSeq) {
-          const intervals = extractExonIntervals(maskedGeneSeq);
-          const spliced = intervals.length ? buildSplicedIndex(intervals, geneSequence, readLength, seeds) : null;
-          txDataRef.current = spliced ? [spliced] : [];
+        } else {
+          txDataRef.current = null;
         }
         setSeedStats({ perSeedStats: [], topUniqueSamples: [] });
         setSeedStats(computeSeedStats(indicesRef.current, seeds));

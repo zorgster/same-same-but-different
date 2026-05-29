@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem -Path \"c:\\\\Data\\\\Projects\\\\Rust\\\\FastqGeneFinder\" -Recurse -Include \"*.rs\", \"*.toml\")",
+      "Bash(Select-Object FullName)",
+      "Bash(Sort-Object)"
+    ]
+  }
+}

@@ -58,6 +58,14 @@ export const APPS = [
           () => import("./pdf-table-extractor/PdfTableExtractor.jsx"),
         ),
       },
+      {
+        id: "data-requester",
+        name: "Data Requester",
+        version: "0.1.0",
+        desc: "Restructure a customers spreadsheet to fit your own template",
+        status: "experimental",
+        component: lazyTool(() => import("./data-requester/DataRequester.jsx")),
+      },
     ],
   },
   {

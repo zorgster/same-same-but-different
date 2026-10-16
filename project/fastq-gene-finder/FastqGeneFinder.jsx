@@ -800,6 +800,24 @@ export default function FastqGeneFinderApp() {
   /* ---------------- Processing ---------------- */
   const BATCH_SIZE = 50000;
 
+  const failRun = (err) => {
+    console.error("FASTQ processing failed:", err);
+    abortRef.current = true;                // stops streamFastq and waitForCapacity
+    workersRef.current.forEach((w) => w.terminate());
+    workersRef.current = [];
+    pendingBatchRef.current = [];
+    currentBatchRef.current = [];
+    idleWorkersRef.current = [];
+    setFinalElapsedMs(
+      startTimeRef.current != null
+        ? Date.now() - startTimeRef.current - totalPausedMsRef.current
+        : 0,
+    );
+    setProcessingFinished(true);            // R1 results stay viewable
+    setStatus("error");
+    // optional: setErrorMessage(err?.message ?? String(err)) and show it beside the status
+  };
+
   const handleProcess = useCallback(async () => {
     if (!files.length || !geneSequence || !seedArrays.length) return;
 
@@ -865,11 +883,25 @@ export default function FastqGeneFinderApp() {
     const dispatchBatch = (workerIdx) => {
       const reads = pendingBatchRef.current.shift();
       const batchId = nextBatchIdRef.current++;
+      const send = (r) =>
+        workers[workerIdx].postMessage({
+          type: "batch",
+          payload: { batchId, reads },
+        });
+      
+      try {
+        send(reads);
+      } catch (err) {
+        if (err?.name === "DataCloneError") return failRun(err);
+        // Views pin their whole source chunks; retry with 150-byte copies.
+        try {
+          send(reads.map(({ seqBytes, index }) => ({ seqBytes: seqBytes.slice(), index })));
+          console.warn(`Batch $(batchId): clone failed, re-sent as compact copies`);
+        } catch (err2) {
+          return failRun(err2);
+        }
+      }
       batchesDispatchedRef.current++;
-      workers[workerIdx].postMessage({
-        type: "batch",
-        payload: { batchId, reads },
-      });
     };
 
     const drainPendingBatches = () => {
@@ -1037,29 +1069,34 @@ export default function FastqGeneFinderApp() {
     await allReadyPromise;
 
     // Stream FASTQ, accumulate reads into batches
-    await streamFastq({
-      file,
-      readLength,
-      batchSize: BATCH_SIZE,
-      onRead: (seqBytes, index) => {
-        totalReadsRef.current++;
-        currentBatchRef.current.push({ seqBytes, index });
-        if (currentBatchRef.current.length >= BATCH_SIZE) {
-          pendingBatchRef.current.push(currentBatchRef.current);
-          currentBatchRef.current = [];
-          drainPendingBatches();
+    try {
+      await streamFastq({
+        file,
+        readLength,
+        batchSize: BATCH_SIZE,
+        onRead: (seqBytes, index) => {
+          totalReadsRef.current++;
+          currentBatchRef.current.push({ seqBytes, index });
+          if (currentBatchRef.current.length >= BATCH_SIZE) {
+            pendingBatchRef.current.push(currentBatchRef.current);
+            currentBatchRef.current = [];
+            drainPendingBatches();
+          }
+        },
+        pauseRef,
+        abortRef,
+        onProgress: (done, total, fileName) =>
+          setProgress({ done, total, fileName }),
+        tick,
+        waitForCapacity: async () => {
+          while (pendingBatchRef.current.length >= actualWorkerCount * 2 && !abortRef.current)
+            await tick();
         }
-      },
-      pauseRef,
-      abortRef,
-      onProgress: (done, total, fileName) =>
-        setProgress({ done, total, fileName }),
-      tick,
-      waitForCapacity: async () => {
-        while (pendingBatchRef.current.length >= actualWorkerCount * 2 && !abortRef.current)
-          await tick();
-      }
-    });
+      });
+  } catch (err) {
+    failRun(err);
+    return;
+  }
 
     streamDoneRef.current = true;
 
@@ -1133,11 +1170,25 @@ export default function FastqGeneFinderApp() {
     const dispatchBatch = (workerIdx) => {
       const reads = pendingBatchRef.current.shift();
       const batchId = nextBatchIdRef.current++;
+      const send = (r) =>
+        workers[workerIdx].postMessage({
+          type: "batch",
+          payload: { batchId, reads },
+        });
+      
+      try {
+        send(reads);
+      } catch (err) {
+        if (err?.name === "DataCloneError") return failRun(err);
+        // Views pin their whole source chunks; retry with 150-byte copies.
+        try {
+          send(reads.map(({ seqBytes, index }) => ({ seqBytes: seqBytes.slice(), index })));
+          console.warn(`Batch $(batchId): clone failed, re-sent as compact copies`);
+        } catch (err2) {
+          return failRun(err2);
+        }
+      }
       batchesDispatchedRef.current++;
-      workers[workerIdx].postMessage({
-        type: "batch",
-        payload: { batchId, reads },
-      });
     };
 
     const drainPendingBatches = () => {
@@ -1241,29 +1292,34 @@ export default function FastqGeneFinderApp() {
     );
     await allReadyPromise;
 
-    await streamFastq({
-      file: r2File,
-      readLength,
-      batchSize: BATCH_SIZE,
-      onRead: (seqBytes, index) => {
-        if (!r2Map.has(index)) return; // skip reads whose R1 did not match
-        currentBatchRef.current.push({ seqBytes, index });
-        if (currentBatchRef.current.length >= BATCH_SIZE) {
-          pendingBatchRef.current.push(currentBatchRef.current);
-          currentBatchRef.current = [];
-          drainPendingBatches();
+    try {
+      await streamFastq({
+        file: r2File,
+        readLength,
+        batchSize: BATCH_SIZE,
+        onRead: (seqBytes, index) => {
+          if (!r2Map.has(index)) return; // skip reads whose R1 did not match
+          currentBatchRef.current.push({ seqBytes: seqBytes.slice(), index });
+          if (currentBatchRef.current.length >= BATCH_SIZE) {
+            pendingBatchRef.current.push(currentBatchRef.current);
+            currentBatchRef.current = [];
+            drainPendingBatches();
+          }
+        },
+        pauseRef,
+        abortRef,
+        onProgress: (done, total, fileName) =>
+          setProgress({ done, total, fileName }),
+        tick,
+        waitForCapacity: async () => {
+          while (pendingBatchRef.current.length >= actualWorkerCount * 2 && !abortRef.current)
+            await tick();
         }
-      },
-      pauseRef,
-      abortRef,
-      onProgress: (done, total, fileName) =>
-        setProgress({ done, total, fileName }),
-      tick,
-      waitForCapacity: async () => {
-        while (pendingBatchRef.current.length >= actualWorkerCount * 2 && !abortRef.current)
-          await tick();
-      }
-    });
+      });
+    } catch (err) {
+      failRun(err);
+      return;
+    }
 
     streamDoneRef.current = true;
 

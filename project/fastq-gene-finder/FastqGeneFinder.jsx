@@ -15,6 +15,7 @@ import GeneLookupWidget from "./widgets/GeneLookupWidget.jsx";
 import * as Styles from "./styles/fastq-gene-finder-styles.jsx";
 import MoreInfoWidget from "./widgets/MoreInfoWidget.jsx";
 import { exportOverviewPdf, exportZoomWindowPdf } from "./utils/exportPdf.js";
+import { gunzip } from "fflate";
 
 function makeSeedPositions(
   readLength,
@@ -49,6 +50,16 @@ function concat(a, b) {
   return out;
 }
 
+function gunzipStream() {
+  let ctrl;
+  const gz = new Gunzip((chunk) => ctrl.enqueue(chunk));
+  return new TransformStream({
+    start(c) { ctrl = c; },
+    transform(chunk) { gz.push(chunk, false); },
+    flush() { gz.push(new Uint8Array(0), true); },
+  });
+}
+
 function getFastqReadableStream(
   file,
   onCompressedBytes,
@@ -66,7 +77,7 @@ function getFastqReadableStream(
     });
     return raw
       .pipeThrough(counter)
-      .pipeThrough(new DecompressionStream("gzip"));
+      .pipeThrough(gunzipStream());
   }
   return raw;
 }

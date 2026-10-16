@@ -1,4 +1,3 @@
-import { version } from "jszip";
 import { lazy } from "react";
 
 const lazyTool = (loader) => lazy(loader);

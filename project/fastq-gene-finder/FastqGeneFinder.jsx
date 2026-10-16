@@ -15,7 +15,7 @@ import GeneLookupWidget from "./widgets/GeneLookupWidget.jsx";
 import * as Styles from "./styles/fastq-gene-finder-styles.jsx";
 import MoreInfoWidget from "./widgets/MoreInfoWidget.jsx";
 import { exportOverviewPdf, exportZoomWindowPdf } from "./utils/exportPdf.js";
-import { gunzip } from "fflate";
+import { Gunzip } from "fflate";
 
 function makeSeedPositions(
   readLength,

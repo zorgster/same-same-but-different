@@ -92,7 +92,7 @@ export const APPS = [
       {
         id: "fastq-gene-finder",
         name: "FASTQ Gene Finder",
-        version: "0.5.0",
+        version: "0.6.0",
         desc: "[Multiworker] Find a gene in FASTQ or FASTQ.GZ files using an array of sparse seeds [Uses Ensembl REST API]",
         status: "beta",
         component: lazyTool(

@@ -114,6 +114,7 @@ async function streamFastq({
   tick,
   batchSize = 200,
   readLength,
+  waitForCapacity,
 }) {
   const totalBytes = file.size;
   let bytesRead = 0;
@@ -132,6 +133,7 @@ async function streamFastq({
 
   try {
     while (true) {
+      if (waitForCapacity) await waitForCapacity();
       const { value, done } = await reader.read();
 
       if (abortRef && abortRef.current) { await reader.cancel(); return { done: true }; }
@@ -1042,6 +1044,10 @@ export default function FastqGeneFinderApp() {
       onProgress: (done, total, fileName) =>
         setProgress({ done, total, fileName }),
       tick,
+      waitForCapacity: async () => {
+        while (pendingBatchRef.current.length >= actualWorkerCount * 2 && !abortRef.current)
+          await tick();
+      }
     });
 
     streamDoneRef.current = true;
@@ -1242,6 +1248,10 @@ export default function FastqGeneFinderApp() {
       onProgress: (done, total, fileName) =>
         setProgress({ done, total, fileName }),
       tick,
+      waitForCapacity: async () => {
+        while (pendingBatchRef.current.length >= actualWorkerCount * 2 && !abortRef.current)
+          await tick();
+      }
     });
 
     streamDoneRef.current = true;
@@ -1326,6 +1336,9 @@ export default function FastqGeneFinderApp() {
       w.terminate();
     });
     workersRef.current = [];
+    pendingBatchRef.current = [];
+    currentBatchRef.current = [];
+    idleWorkersRef.current = [];
     setFinalElapsedMs(
       startTimeRef.current != null
         ? Date.now() - startTimeRef.current - totalPausedMsRef.current

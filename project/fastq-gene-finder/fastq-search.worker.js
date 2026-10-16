@@ -147,7 +147,7 @@ self.onmessage = ({ data: { type, payload } }) => {
       for (const [pos, score] of fwdScores) {
         if (score >= minSeedMatches) {
           matches.push({
-            seqBytes, orientation: 1,
+            seqBytes: seqBytes.slice(), orientation: 1,
             readNumber: index + 1, fastqHeaderLine: index * 4 + 1, fastqSequenceLine: index * 4 + 2,
             position: pos, score,
             index, seedIds: fwdSeedsMap.get(pos) || [],
@@ -160,7 +160,7 @@ self.onmessage = ({ data: { type, payload } }) => {
       for (const [pos, score] of revScores) {
         if (score >= minSeedMatches) {
           matches.push({
-            seqBytes, orientation: 0,
+            seqBytes: seqBytes.slice(), orientation: 0,
             readNumber: index + 1, fastqHeaderLine: index * 4 + 1, fastqSequenceLine: index * 4 + 2,
             position: pos, score,
             index, seedIds: revSeedsMap.get(pos) || [],
@@ -229,7 +229,7 @@ self.onmessage = ({ data: { type, payload } }) => {
             const gPos = exonMap ? txPosToGenePos(bestTxPos, exonMap) : null;
             if (gPos != null) {
               matches.push({
-                seqBytes, orientation: bestOrientation,
+                seqBytes: seqBytes.slice(), orientation: bestOrientation,
                 readNumber: index + 1, fastqHeaderLine: index * 4 + 1, fastqSequenceLine: index * 4 + 2,
                 position: gPos, score: bestScore,
                 index,

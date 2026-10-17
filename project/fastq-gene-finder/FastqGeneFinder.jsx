@@ -15,6 +15,7 @@ import GeneLookupWidget from "./widgets/GeneLookupWidget.jsx";
 import * as Styles from "./styles/fastq-gene-finder-styles.jsx";
 import MoreInfoWidget from "./widgets/MoreInfoWidget.jsx";
 import { exportOverviewPdf, exportZoomWindowPdf } from "./utils/exportPdf.js";
+import { buildGeneIndex, buildTxIndex } from "./utils/compactIndex.js";
 import { Gunzip } from "fflate";
 
 function makeSeedPositions(
@@ -246,10 +247,8 @@ function generateSeedArrays(
   );
 }
 
-// Build a gene-side sparse-mer index for each seed array.
-// Each index maps the sampled bases (concatenated) -> array of window start positions in the gene
+// Gene-side sparse-mer indices are built as compact typed arrays (utils/compactIndex.js).
 // 2-bit encoding: A=0, T=1, C=2, G=3 (N/other=0)
-const GENE_BASE_BITS = { A: 0, T: 1, C: 2, G: 3, a: 0, t: 1, c: 2, g: 3 };
 const KEY_BITS_TO_CHAR = ["A", "T", "C", "G"];
 
 function decodeNumericKey(key, len) {
@@ -264,27 +263,7 @@ function decodeNumericKey(key, len) {
 
 
 function buildSeedIndices(geneSequence, readLength, seedArrays) {
-  const maxStart = Math.max(0, geneSequence.length - readLength);
-  return seedArrays.map((seed) => {
-    const map = new Map(); // Map<number, number[]>
-    for (let pos = 0; pos <= maxStart; pos++) {
-      let ok = true;
-      let key = 0;
-      for (const idx of seed.positions) {
-        const ch = geneSequence[pos + idx];
-        if (!ch) {
-          ok = false;
-          break;
-        }
-        key = key * 4 + (GENE_BASE_BITS[ch] ?? 0);
-      }
-      if (!ok) continue;
-      const hits = map.get(key);
-      if (hits) hits.push(pos);
-      else map.set(key, [pos]);
-    }
-    return map;
-  });
+  return buildGeneIndex(geneSequence, readLength, seedArrays);
 }
 
 function buildCombinedTxIndex(transcripts, geneSequence, geneInfo, readLength, seedArrays) {
@@ -294,8 +273,8 @@ function buildCombinedTxIndex(transcripts, geneSequence, geneInfo, readLength, s
       ? [geneInfo.end - ce, geneInfo.end - cs + 1]
       : [cs - geneInfo.start, ce - geneInfo.start + 1];
 
-  const indices = seedArrays.map(() => new Map()); // Map<key, Map<txId, txPos[]>>
   const exonMaps = new Map(); // Map<txId, [{txStart, txEnd, gStart}]>
+  const txList = [];          // [{ txIdx, seq }] — spliced sequences to index
 
   for (let i = 0; i < transcripts.length; i++) {
     const t = transcripts[i];
@@ -312,26 +291,9 @@ function buildCombinedTxIndex(transcripts, geneSequence, geneInfo, readLength, s
     }
     if (seq.length < readLength) continue;
     exonMaps.set(i, exonMap);
-
-    const maxStart = seq.length - readLength;
-    for (let pos = 0; pos <= maxStart; pos++) {
-      for (let s = 0; s < seedArrays.length; s++) {
-        const seed = seedArrays[s];
-        let key = 0, ok = true;
-        for (const idx of seed.positions) {
-          const ch = seq[pos + idx];
-          if (!ch) { ok = false; break; }
-          key = key * 4 + (GENE_BASE_BITS[ch] ?? 0);
-        }
-        if (!ok) continue;
-        let keyMap = indices[s].get(key);
-        if (!keyMap) { keyMap = new Map(); indices[s].set(key, keyMap); }
-        const txPositions = keyMap.get(i);
-        if (txPositions) txPositions.push(pos);
-        else keyMap.set(i, [pos]);
-      }
-    }
+    txList.push({ txIdx: i, seq });
   }
+  const indices = buildTxIndex(txList, readLength, seedArrays);
   return { indices, exonMaps };
 }
 
@@ -350,13 +312,15 @@ function computeTxIndexStats(indices, exonMaps, transcripts) {
     });
   }
   for (let s = 0; s < numSeeds; s++) {
-    for (const [, txMap] of indices[s]) {
-      const isTxUnique = txMap.size === 1;
-      for (const [txIdx, positions] of txMap) {
-        const st = statsMap.get(txIdx);
+    const { starts, entTx, entCount } = indices[s];
+    const nKeys = starts.length - 1;
+    for (let k = 0; k < nKeys; k++) {
+      const isTxUnique = starts[k + 1] - starts[k] === 1;
+      for (let e = starts[k]; e < starts[k + 1]; e++) {
+        const st = statsMap.get(entTx[e]);
         if (st) {
           st.perSeed[s].uniqueKeys++;
-          st.perSeed[s].totalPositions += positions.length;
+          st.perSeed[s].totalPositions += entCount[e];
           if (isTxUnique) st.perSeed[s].txUniqueKeys++;
         }
       }
@@ -373,7 +337,7 @@ function computeSeedStats(seedIndices, seedArrays, topN = 5) {
   const top = [];
 
   for (let seedIdx = 0; seedIdx < seedIndices.length; seedIdx++) {
-    const map  = seedIndices[seedIdx];
+    const { keys, starts, positions } = seedIndices[seedIdx];
     const seed = seedArrays[seedIdx];
     const stats = {
       seedId: seed.id,
@@ -384,13 +348,14 @@ function computeSeedStats(seedIndices, seedArrays, topN = 5) {
     };
     perSeedStats.push(stats);
 
-    for (const [key, positions] of map) {
-      const count = positions.length;
+    for (let k = 0; k < keys.length; k++) {
+      const count = starts[k + 1] - starts[k];
       stats.distinctSamples++;
       stats.totalAlignments += count;
       if (count === 1) stats.singletonCount++;
 
-      const item = { seedId: seed.id, seedLabel: seed.label, rawKey: key, keyLen: seed.positions.length, count, positions: positions.slice(0, 20) };
+      const firstPositions = Array.from(positions.subarray(starts[k], Math.min(starts[k + 1], starts[k] + 20)));
+      const item = { seedId: seed.id, seedLabel: seed.label, rawKey: keys[k], keyLen: seed.positions.length, count, positions: firstPositions };
       if (top.length < topN) {
         top.push(item);
         top.sort((a, b) => b.count - a.count);

@@ -1,3 +1,5 @@
+import { findKey } from "./utils/compactIndex.js";
+
 let seedArrays, seedIndices, minSeedMatches;
 let txData = [];
 let positionSeedMap;
@@ -29,7 +31,7 @@ function computeJunctions(txPos, readLen, exonMap) {
 
 // 2-bit numeric key encoding — A=0, T=1, C=2, G=3 (N/other=0)
 // Keys are built with: key = key * 4 + BASE_BITS[byte]  (pure arithmetic, no bitwise ops)
-// Matches buildSeedIndices encoding in FastqGeneFinder.jsx exactly.
+// Matches the index encoding in utils/compactIndex.js exactly.
 const BASE_BITS = new Uint8Array(256); // default 0 (A)
 BASE_BITS[84] = 1; BASE_BITS[116] = 1;  // T/t
 BASE_BITS[67] = 2; BASE_BITS[99] = 2;   // C/c
@@ -122,8 +124,11 @@ self.onmessage = ({ data: { type, payload } }) => {
       // Lookup all forward keys (reuse Map, clear between reads)
       fwdScores.clear(); fwdSeedsMap.clear();
       for (let s = 0; s < numSeeds; s++) {
-        const hits = seedIndices[s].get(readKeysFwd[s]);
-        if (hits) for (const pos of hits) {
+        const idx = seedIndices[s];
+        const k = findKey(idx, readKeysFwd[s]);
+        if (k < 0) continue;
+        for (let j = idx.starts[k], end = idx.starts[k + 1]; j < end; j++) {
+          const pos = idx.positions[j];
           fwdScores.set(pos, (fwdScores.get(pos) || 0) + 1);
           const sl = fwdSeedsMap.get(pos);
           if (sl) sl.push(seedArrays[s].id); else fwdSeedsMap.set(pos, [seedArrays[s].id]);
@@ -133,8 +138,11 @@ self.onmessage = ({ data: { type, payload } }) => {
       // Lookup all RC keys (reuse Map, clear between reads)
       revScores.clear(); revSeedsMap.clear();
       for (let s = 0; s < numSeeds; s++) {
-        const hits = seedIndices[s].get(readKeysRev[s]);
-        if (hits) for (const pos of hits) {
+        const idx = seedIndices[s];
+        const k = findKey(idx, readKeysRev[s]);
+        if (k < 0) continue;
+        for (let j = idx.starts[k], end = idx.starts[k + 1]; j < end; j++) {
+          const pos = idx.positions[j];
           revScores.set(pos, (revScores.get(pos) || 0) + 1);
           const sl = revSeedsMap.get(pos);
           if (sl) sl.push(seedArrays[s].id); else revSeedsMap.set(pos, [seedArrays[s].id]);
@@ -180,20 +188,23 @@ self.onmessage = ({ data: { type, payload } }) => {
           txRevScores.clear(); txRevBest.clear(); txRevSeedIds.clear();
 
           for (let s = 0; s < numSeeds; s++) {
-            const fwdHit = txIndices[s].get(readKeysFwd[s]);
-            if (fwdHit) {
-              for (const [txIdx, positions] of fwdHit) {
+            const tIdx = txIndices[s];
+            const kf = findKey(tIdx, readKeysFwd[s]);
+            if (kf >= 0) {
+              for (let e = tIdx.starts[kf], end = tIdx.starts[kf + 1]; e < end; e++) {
+                const txIdx = tIdx.entTx[e];
                 txFwdScores.set(txIdx, (txFwdScores.get(txIdx) || 0) + 1);
-                if (!txFwdBest.has(txIdx)) txFwdBest.set(txIdx, positions[0]);
+                if (!txFwdBest.has(txIdx)) txFwdBest.set(txIdx, tIdx.entPos[e]);
                 const sl = txFwdSeedIds.get(txIdx);
                 if (sl) sl.push(seedArrays[s].id); else txFwdSeedIds.set(txIdx, [seedArrays[s].id]);
               }
             }
-            const revHit = txIndices[s].get(readKeysRev[s]);
-            if (revHit) {
-              for (const [txIdx, positions] of revHit) {
+            const kr = findKey(tIdx, readKeysRev[s]);
+            if (kr >= 0) {
+              for (let e = tIdx.starts[kr], end = tIdx.starts[kr + 1]; e < end; e++) {
+                const txIdx = tIdx.entTx[e];
                 txRevScores.set(txIdx, (txRevScores.get(txIdx) || 0) + 1);
-                if (!txRevBest.has(txIdx)) txRevBest.set(txIdx, positions[0]);
+                if (!txRevBest.has(txIdx)) txRevBest.set(txIdx, tIdx.entPos[e]);
                 const sl = txRevSeedIds.get(txIdx);
                 if (sl) sl.push(seedArrays[s].id); else txRevSeedIds.set(txIdx, [seedArrays[s].id]);
               }

@@ -37,6 +37,6 @@
     "spreadsheets"
   ],
   "author": "Oliver Slay",
-  "license": "ISC",
+  "license": "GPL-3.0-or-later",
   "description": "SameSameButDifferent (SSBD) - browser-based Excel and list validation tools"
 }

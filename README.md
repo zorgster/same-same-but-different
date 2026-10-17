@@ -56,4 +56,4 @@ Use these settings in Netlify when this repository is connected:
 
 ## License
 
-ISC
+Copyright (C) 2026 Oliver Slay. Licensed under the GNU GPL v3.0 (or any later version); see LICENSE.

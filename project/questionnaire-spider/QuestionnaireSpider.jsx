@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import * as XLSX from "xlsx";
 import DropZone from "../widgets/DropZone";
 import RadarChart from "./widgets/RadarChart";
+import RCodeWidget from "./widgets/RCodeWidget";
 import { splitPastedText, parseRows, averageFor } from "./parsers/table-parser";
 import { COLORS, MONO_FONT, UI_FONT } from "../styles/light-theme";
 
@@ -114,7 +115,10 @@ export default function QuestionnaireSpider() {
   return (
     <div style={styles.app}>
       <div style={styles.wrap}>
-        <h1 style={styles.title}>Questionnaire Spider</h1>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+          <h1 style={styles.title}>Questionnaire Spider</h1>
+          <RCodeWidget />
+        </div>
         <p style={styles.subtitle}>
           Paste your questionnaire table from Excel (or drop a CSV/XLSX) — one row per person, one column per question — and plot everyone's answers against the best possible score and the group average.
         </p>

@@ -4,6 +4,7 @@ import {
   generateTestGeneSequence,
   downloadTestFastq,
 } from "./gene-test-data.js";
+import { geneCacheKey, getCachedGene, putCachedGene } from "../utils/geneCache.js";
 
 function parseTranscripts(rawList) {
   const sorted = [...rawList].sort((a, b) => {
@@ -26,7 +27,24 @@ function parseTranscripts(rawList) {
   }));
 }
 
-async function fetchGeneSequence(geneName) {
+// Cache-first: annotation + sequence are kept in IndexedDB per gene symbol.
+async function fetchGeneSequence(geneName, { useCache = true } = {}) {
+  const key = geneCacheKey("homo_sapiens", geneName);
+  if (useCache) {
+    const cached = await getCachedGene(key);
+    if (cached?.lookupJson && cached?.maskedSeq) {
+      const lookupJson = cached.lookupJson;
+      const transcripts = parseTranscripts(Array.isArray(lookupJson.Transcript) ? lookupJson.Transcript : []);
+      return {
+        seq: cached.maskedSeq.toUpperCase(),
+        maskedSeq: cached.maskedSeq,
+        lookupJson,
+        transcripts,
+        cachedAt: cached.cachedAt,
+      };
+    }
+  }
+
   const lookup = await fetch(
     `https://rest.ensembl.org/lookup/symbol/homo_sapiens/${encodeURIComponent(geneName)}?content-type=application/json&expand=1`,
   );
@@ -39,8 +57,10 @@ async function fetchGeneSequence(geneName) {
   if (!seqRes.ok) throw new Error("Sequence fetch failed");
   const seqJson = await seqRes.json();
 
+  await putCachedGene(key, lookupJson, seqJson.seq);
+
   const transcripts = parseTranscripts(Array.isArray(lookupJson.Transcript) ? lookupJson.Transcript : []);
-  return { seq: seqJson.seq.toUpperCase(), maskedSeq: seqJson.seq, lookupJson, transcripts };
+  return { seq: seqJson.seq.toUpperCase(), maskedSeq: seqJson.seq, lookupJson, transcripts, cachedAt: null };
 }
 
 const secondaryBtn = {
@@ -60,12 +80,13 @@ export default function GeneLookupWidget({
   const [error, setError] = useState("");
   const [lookupInfo, setLookupInfo] = useState(null);
 
-  const handleFetch = async () => {
+  const handleFetch = async ({ useCache = true } = {}) => {
     setLoading(true);
     setError("");
     try {
-      const { seq, maskedSeq, lookupJson, transcripts } = await fetchGeneSequence(geneName);
+      const { seq, maskedSeq, lookupJson, transcripts, cachedAt } = await fetchGeneSequence(geneName, { useCache });
       setLookupInfo({
+        cachedAt,
         displayName: lookupJson.display_name || geneName,
         id: lookupJson.id,
         version: lookupJson.version,
@@ -121,11 +142,12 @@ export default function GeneLookupWidget({
             value={geneName}
             onChange={(e) => setGeneName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && geneName && !loading && handleFetch()}
+
             placeholder="e.g. BRCA1"
             maxLength={50}
             style={{ width: "9ch", fontFamily: "monospace" }}
           />
-          <button onClick={handleFetch} disabled={!geneName || loading}>
+          <button onClick={() => handleFetch()} disabled={!geneName || loading}>
             {loading ? "Fetching…" : "Lookup"}
           </button>
         </div>
@@ -164,6 +186,21 @@ export default function GeneLookupWidget({
           <div><strong>Assembly:</strong> {lookupInfo.assembly}</div>
           <div><strong>Canonical Transcript:</strong> {lookupInfo.canonical || "N/A"}</div>
           <div><strong>Gene Length:</strong> {geneSequence?.length || "-"}</div>
+          <div style={{ color: "#777", marginTop: "0.25rem" }}>
+            {lookupInfo.cachedAt
+              ? `From browser cache (${new Date(lookupInfo.cachedAt).toLocaleDateString()})`
+              : "Fetched from Ensembl (saved to browser cache)"}
+            {lookupInfo.cachedAt && (
+              <button
+                onClick={() => handleFetch({ useCache: false })}
+                disabled={loading}
+                title="Fetch the current annotation from Ensembl and update the cache"
+                style={{ ...secondaryBtn, marginLeft: "0.4rem" }}
+              >
+                Refresh
+              </button>
+            )}
+          </div>
         </div>
       )}
       {error && <div style={{ color: "red", marginTop: "0.5rem" }}>{error}</div>}

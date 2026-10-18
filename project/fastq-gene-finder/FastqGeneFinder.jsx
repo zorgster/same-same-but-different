@@ -18,11 +18,28 @@ import { exportOverviewPdf, exportZoomWindowPdf } from "./utils/exportPdf.js";
 import { buildGeneIndex, buildTxIndex } from "./utils/compactIndex.js";
 import { Gunzip } from "fflate";
 
+// Seeded PRNG (mulberry32): the same seed number always yields the same seed arrays.
+function mulberry32(seed) {
+  let a = seed >>> 0;
+  return function () {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function parseSeedNumber(value) {
+  const n = Number.parseInt(String(value).trim(), 10);
+  return Number.isFinite(n) ? n >>> 0 : 1;
+}
+
 function makeSeedPositions(
   readLength,
   startFraction,
   endFraction,
   positionsPerArray,
+  rng = Math.random,
 ) {
   const start = Math.max(0, Math.floor(readLength * startFraction));
   const end = Math.max(start + 1, Math.ceil(readLength * endFraction));
@@ -33,7 +50,7 @@ function makeSeedPositions(
   // Sequential sampling: adaptive probability guarantees exactly `count` positions
   // in one forward pass — no rejection retries, no sort needed.
   for (let i = start; i < end && needed > 0; i++, remaining--) {
-    if (Math.random() < needed / remaining) {
+    if (rng() < needed / remaining) {
       positions.push(i);
       needed--;
     }
@@ -230,8 +247,10 @@ async function streamFastq({
 ============================================================ */
 function generateSeedArrays(
   readLength,
+  seedNumber,
   positionsPerArray = FASTQ_GENE_FINDER_CONFIG.positionsPerSeedArray,
 ) {
+  const rng = mulberry32(seedNumber);
   let seedId = 0;
   return FASTQ_GENE_FINDER_CONFIG.seedFamilies.flatMap((family) =>
     Array.from({ length: family.count }, () => ({
@@ -242,9 +261,23 @@ function generateSeedArrays(
         family.startFraction,
         family.endFraction,
         positionsPerArray,
+        rng,
       ),
     })),
   );
+}
+
+// Build gene + transcript indices and their stats for a seed set (one place, used by
+// gene lookup, seed-file load and seed-number changes).
+function buildSeedData(seeds, sequence, info, txs, readLength, seqMode) {
+  const indices = buildSeedIndices(sequence, readLength, seeds);
+  let txData = null;
+  let txIndexStats = null;
+  if (seqMode === "RNA" && txs?.length && info) {
+    txData = buildCombinedTxIndex(txs, sequence, info, readLength, seeds);
+    txIndexStats = computeTxIndexStats(txData.indices, txData.exonMaps, txs);
+  }
+  return { indices, txData, txIndexStats, seedStats: computeSeedStats(indices, seeds) };
 }
 
 // Gene-side sparse-mer indices are built as compact typed arrays (utils/compactIndex.js).
@@ -448,6 +481,10 @@ export default function FastqGeneFinderApp() {
   const [r2File, setR2File] = useState(null);
   const [seqMode, setSeqMode] = useState("DNA");
   const [geneName, setGeneName] = useState("");
+  // Seeds: a seed number (deterministic PRNG) or a loaded seeds JSON, chosen before or after gene lookup
+  const [seedNumber, setSeedNumber] = useState(() => String(Math.floor(Math.random() * 1_000_000)));
+  const [loadedSeedFile, setLoadedSeedFile] = useState(null); // { name, readLength, seedNumber, seedArrays }
+  const [seedSource, setSeedSource] = useState(null);         // { type: "number", value } | { type: "file", name, seedNumber }
   const [geneSequence, setGeneSequence] = useState("");
   const [geneInfo, setGeneInfo] = useState(null);
   const [maskedGeneSeq, setMaskedGeneSeq] = useState(null);
@@ -651,6 +688,39 @@ export default function FastqGeneFinderApp() {
     setPileupWindowStart(Math.max(0, Math.min(maxStart, target)));
   };
 
+  const seedControlsDisabled = ["processing", "processing-r2", "pairing", "paused"].includes(status);
+
+  // Builds indices + stats once for a seed set and stores them.
+  function applySeedData(seeds, sequence, info, txs) {
+    const data = buildSeedData(seeds, sequence, info, txs, readLength, seqMode);
+    setSeedArrays(seeds);
+    indicesRef.current = data.indices;
+    txDataRef.current = data.txData;
+    setTxIndexStats(data.txIndexStats);
+    setSeedStats(data.seedStats);
+  }
+
+  // Regenerate seeds from a seed number when a gene is already loaded (Enter / Random / Apply / clear file).
+  function regenerateFromSeedNumber(value) {
+    if (!geneSequence || !readLength) return;
+    const n = parseSeedNumber(value);
+    const seeds = generateSeedArrays(readLength, n);
+    setSeedSource({ type: "number", value: n });
+    applySeedData(seeds, geneSequence, geneInfo, transcripts);
+  }
+
+  function handleRandomSeed() {
+    const value = String(Math.floor(Math.random() * 1_000_000));
+    setSeedNumber(value);
+    setLoadedSeedFile(null);
+    regenerateFromSeedNumber(value);
+  }
+
+  function handleClearSeedFile() {
+    setLoadedSeedFile(null);
+    regenerateFromSeedNumber(seedNumber);
+  }
+
   const handleGeneSequenceLoaded = useCallback(
     (sequence, info, maskedSeq, newTranscripts) => {
       setGeneSequence(sequence);
@@ -666,21 +736,21 @@ export default function FastqGeneFinderApp() {
       setActiveTab("seeds");
 
       if (readLength) {
-        const seeds = generateSeedArrays(readLength);
-        setSeedArrays(seeds);
-        indicesRef.current = buildSeedIndices(sequence, readLength, seeds);
-
-        // Build per-transcript combined index (RNA) or merged spliced index (DNA/fallback)
-        if (seqMode === "RNA" && newTranscripts?.length && info) {
-          const txData = buildCombinedTxIndex(newTranscripts, sequence, info, readLength, seeds);
-          txDataRef.current = txData;
-          setTxIndexStats(computeTxIndexStats(txData.indices, txData.exonMaps, newTranscripts));
+        // Use a seeds JSON loaded beforehand if it fits this read length; otherwise the seed number.
+        let seeds;
+        if (loadedSeedFile && loadedSeedFile.readLength === readLength) {
+          seeds = loadedSeedFile.seedArrays;
+          setSeedSource({ type: "file", name: loadedSeedFile.name, seedNumber: loadedSeedFile.seedNumber });
         } else {
-          txDataRef.current = null;
+          if (loadedSeedFile) {
+            alert(`Seed file ${loadedSeedFile.name} was built for readLength=${loadedSeedFile.readLength}, but reads are ${readLength} bp. Using seed number ${seedNumber} instead.`);
+            setLoadedSeedFile(null);
+          }
+          const n = parseSeedNumber(seedNumber);
+          seeds = generateSeedArrays(readLength, n);
+          setSeedSource({ type: "number", value: n });
         }
-
-        setSeedStats({ perSeedStats: [], topUniqueSamples: [] });
-        setSeedStats(computeSeedStats(indicesRef.current, seeds));
+        applySeedData(seeds, sequence, info, newTranscripts);
         setStatus("ready-to-process");
       } else {
         setSeedArrays([]);
@@ -688,7 +758,7 @@ export default function FastqGeneFinderApp() {
         setStatus("awaiting-read-length");
       }
     },
-    [readLength, seqMode],
+    [readLength, seqMode, loadedSeedFile, seedNumber],
   );
 
   const handleGeneLookupFailed = useCallback(() => {
@@ -696,6 +766,7 @@ export default function FastqGeneFinderApp() {
     setGeneInfo(null);
     setMaskedGeneSeq(null);
     setSeedArrays([]);
+    setSeedSource(null);
     setMatchingReads([]);
     setR2Matches([]);
     setValidatedPairs([]);
@@ -718,6 +789,7 @@ export default function FastqGeneFinderApp() {
     abortRef.current = false;
     setGeneSequence("");
     setSeedArrays([]);
+    setSeedSource(null);
 
     setTimeout(async () => {
       try {
@@ -1445,7 +1517,9 @@ export default function FastqGeneFinderApp() {
 
   function handleExportSeedsJson() {
     if (!seedArrays.length) return;
-    const payload = JSON.stringify({ readLength, seedArrays }, null, 2);
+    const exportedSeedNumber =
+      seedSource?.type === "number" ? seedSource.value : seedSource?.seedNumber ?? null;
+    const payload = JSON.stringify({ readLength, seedNumber: exportedSeedNumber, seedArrays }, null, 2);
     const blob = new Blob([payload], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -1463,23 +1537,26 @@ export default function FastqGeneFinderApp() {
     reader.onload = (ev) => {
       try {
         const loaded = JSON.parse(ev.target.result);
-        if (!Array.isArray(loaded.seedArrays) || !loaded.seedArrays.length) return;
-        if (loaded.readLength !== readLength) {
+        if (!Array.isArray(loaded.seedArrays) || !loaded.seedArrays.length) {
+          alert("Seed file contains no seed arrays.");
+          return;
+        }
+        if (readLength && loaded.readLength !== readLength) {
           alert(`Seed file was built for readLength=${loaded.readLength}, current readLength=${readLength}. Seeds not loaded.`);
           return;
         }
-        const seeds = loaded.seedArrays;
-        setSeedArrays(seeds);
-        indicesRef.current = buildSeedIndices(geneSequence, readLength, seeds);
-        if (seqMode === "RNA" && transcripts?.length && geneInfo) {
-          const txData = buildCombinedTxIndex(transcripts, geneSequence, geneInfo, readLength, seeds);
-          txDataRef.current = txData;
-          setTxIndexStats(computeTxIndexStats(txData.indices, txData.exonMaps, transcripts));
-        } else {
-          txDataRef.current = null;
+        const seedFile = {
+          name: file.name,
+          readLength: loaded.readLength,
+          seedNumber: loaded.seedNumber ?? null,
+          seedArrays: loaded.seedArrays,
+        };
+        setLoadedSeedFile(seedFile);
+        // Gene already loaded: rebuild now. Otherwise the file is used at gene lookup (indices built once).
+        if (geneSequence && readLength) {
+          setSeedSource({ type: "file", name: seedFile.name, seedNumber: seedFile.seedNumber });
+          applySeedData(seedFile.seedArrays, geneSequence, geneInfo, transcripts);
         }
-        setSeedStats({ perSeedStats: [], topUniqueSamples: [] });
-        setSeedStats(computeSeedStats(indicesRef.current, seeds));
       } catch {
         alert("Could not parse seed file.");
       }
@@ -1600,6 +1677,67 @@ export default function FastqGeneFinderApp() {
         </div>
 
         <div style={{ flex: 1, minWidth: 0 }}>
+          {/* Seeds: chosen before (or after) gene lookup — seed number or a saved seeds JSON */}
+          <div style={{ display: "flex", gap: "0.3rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.4rem", fontSize: "12px" }}>
+            <label htmlFor="fgf-seed-number" title="Seed for the random seed-array generator — the same number always gives the same arrays">
+              Seed #
+            </label>
+            <input
+              id="fgf-seed-number"
+              value={seedNumber}
+              onChange={(e) => setSeedNumber(e.target.value.replace(/[^0-9]/g, ""))}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") { setLoadedSeedFile(null); regenerateFromSeedNumber(seedNumber); }
+              }}
+              disabled={seedControlsDisabled || !!loadedSeedFile}
+              maxLength={10}
+              style={{ width: "10ch", fontFamily: "monospace" }}
+            />
+            {geneSequence && readLength && !loadedSeedFile && (
+              <button
+                onClick={() => regenerateFromSeedNumber(seedNumber)}
+                disabled={seedControlsDisabled}
+                style={{ fontSize: "11px", padding: "2px 6px", cursor: "pointer" }}
+              >
+                Apply
+              </button>
+            )}
+            <button
+              onClick={handleRandomSeed}
+              disabled={seedControlsDisabled}
+              style={{ fontSize: "11px", padding: "2px 6px", cursor: "pointer" }}
+            >
+              Random
+            </button>
+            <button
+              onClick={() => seedLoadInputRef.current?.click()}
+              disabled={seedControlsDisabled}
+              title="Load a previously saved seeds JSON (before or after gene lookup)"
+              style={{ fontSize: "11px", padding: "2px 6px", cursor: "pointer" }}
+            >
+              Load Seeds JSON
+            </button>
+            <input
+              ref={seedLoadInputRef}
+              type="file"
+              accept=".json"
+              style={{ display: "none" }}
+              onChange={handleLoadSeeds}
+            />
+            {loadedSeedFile && (
+              <span style={{ fontFamily: "monospace" }}>
+                {loadedSeedFile.name}
+                <button
+                  onClick={handleClearSeedFile}
+                  disabled={seedControlsDisabled}
+                  title="Stop using this seed file"
+                  style={{ fontSize: "11px", padding: "0 4px", marginLeft: "0.25rem", cursor: "pointer" }}
+                >
+                  ×
+                </button>
+              </span>
+            )}
+          </div>
           <GeneLookupWidget
             geneName={geneName}
             setGeneName={setGeneName}
@@ -1664,21 +1802,13 @@ export default function FastqGeneFinderApp() {
                 </button>
               </>
             )}
-            <button
-              onClick={() => seedLoadInputRef.current?.click()}
-              disabled={!geneSequence || !readLength}
-              title={!geneSequence || !readLength ? "Do a gene lookup first" : "Load a previously saved seeds JSON"}
-              style={{ fontSize: "11px", padding: "2px 8px", cursor: geneSequence && readLength ? "pointer" : "default", opacity: geneSequence && readLength ? 1 : 0.5 }}
-            >
-              Load Seeds JSON
-            </button>
-            <input
-              ref={seedLoadInputRef}
-              type="file"
-              accept=".json"
-              style={{ display: "none" }}
-              onChange={handleLoadSeeds}
-            />
+            {seedSource && (
+              <span style={{ fontSize: "11px", alignSelf: "center", fontFamily: "monospace" }}>
+                {seedSource.type === "number"
+                  ? `Seeds from seed number ${seedSource.value}`
+                  : `Seeds loaded from ${seedSource.name}${seedSource.seedNumber != null ? ` (seed number ${seedSource.seedNumber})` : ""}`}
+              </span>
+            )}
           </div>
           <SeedVisualization seedArrays={seedArrays} readLength={readLength} />
           <div

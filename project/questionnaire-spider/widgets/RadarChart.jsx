@@ -44,7 +44,7 @@ export default function RadarChart({ questions, series, min, max, step = 0.5 }) 
         const pts = s.values.map((v, i) => polar(i, n, v ?? min, min, max));
         return (
           <g key={s.key}>
-            <path d={toPath(pts)} fill={s.fill ? s.color + "22" : "none"} stroke={s.color} strokeWidth={s.width ?? 2} strokeDasharray={s.dash} strokeLinejoin="round" />
+            <path d={toPath(pts)} fill={s.fill ? s.color + "22" : "none"} stroke={s.color} strokeWidth={s.width ?? 2} strokeDasharray={s.dash || undefined} strokeLinejoin="round" />
             {s.showPoints && pts.map(([x, y], i) => s.values[i] != null && (
               <circle key={i} cx={x} cy={y} r={3} fill={s.color}><title>{`${s.label} — ${questions[i]}: ${s.values[i]}`}</title></circle>
             ))}

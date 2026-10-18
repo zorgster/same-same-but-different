@@ -18,6 +18,14 @@ const PALETTE = ["#0f766e", "#a1562f", "#5b5f8a", "#8a4f6b", "#3f7a9e", "#9a8a2f
 const BEST_COLOR = "#c98a3b";
 const AVG_COLOR = "#5b5f8a";
 
+const DASHES = [
+  { label: "Solid", value: "" },
+  { label: "Dashed", value: "6 4" },
+  { label: "Dotted", value: "2 3" },
+  { label: "Dash-dot", value: "8 3 2 3" },
+];
+const WIDTHS = [1, 2, 3, 4];
+
 const styles = {
   app: { minHeight: "100vh", background: COLORS.bg, fontFamily: UI_FONT, color: COLORS.text, padding: "32px 24px" },
   wrap: { maxWidth: 1100, margin: "0 auto" },
@@ -37,6 +45,10 @@ const styles = {
   h3: { fontSize: 11, textTransform: "uppercase", letterSpacing: "0.06em", color: COLORS.muted, margin: "0 0 8px" },
   chips: { display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 20 },
   chip: (on, color) => ({ border: `1px solid ${on ? color : COLORS.border}`, background: on ? COLORS.accentSoft : COLORS.bg, color: COLORS.text, borderRadius: 999, padding: "4px 10px", fontSize: 12, cursor: "pointer" }),
+  editor: { border: `1px solid ${COLORS.border}`, borderRadius: 8, padding: 12, marginBottom: 20, background: COLORS.bg },
+  editorRow: { display: "flex", flexWrap: "wrap", gap: 10, alignItems: "center", marginTop: 10 },
+  colorDot: (c, on) => ({ width: 22, height: 22, borderRadius: "50%", background: c, cursor: "pointer", padding: 0, border: on ? `3px solid ${COLORS.text}` : `1px solid ${COLORS.border}` }),
+  select: { padding: "5px 8px", fontSize: 13, border: `1px solid ${COLORS.border}`, borderRadius: 6, background: COLORS.surface, color: COLORS.text },
   table: { width: "100%", borderCollapse: "collapse", fontSize: 13, fontVariantNumeric: "tabular-nums" },
   cell: { borderBottom: `1px solid ${COLORS.border}`, padding: "4px 6px", textAlign: "left" },
 };
@@ -50,6 +62,8 @@ export default function QuestionnaireSpider() {
   const [file, setFile] = useState(null);
   const [fileRows, setFileRows] = useState(null);
   const [fileError, setFileError] = useState("");
+  const [overrides, setOverrides] = useState({}); // key -> { color, dash, width }
+  const [editing, setEditing] = useState(null);
 
   const { data, error } = useMemo(() => {
     try {
@@ -88,13 +102,14 @@ export default function QuestionnaireSpider() {
   });
 
   const averages = data ? data.questions.map((_, qi) => averageFor(data.people, qi)) : [];
-  const visible = data ? [
-    ...data.people
-      .map((p, i) => ({ key: `p${i}`, label: p.name, values: p.values, color: PALETTE[i % PALETTE.length], fill: true, showPoints: true }))
-      .filter((s) => !hidden.has(s.label)),
+  const allSeries = (data ? [
+    ...data.people.map((p, i) => ({ key: `p:${p.name}`, label: p.name, values: p.values, color: PALETTE[i % PALETTE.length], fill: true, showPoints: true })),
     { key: "best", label: "Best possible", values: data.questions.map(() => best), color: BEST_COLOR, dash: "6 4" },
     { key: "avg", label: "Average", values: averages, color: AVG_COLOR, dash: "2 3", width: 2.5, showPoints: true },
-  ] : [];
+  ] : []).map((s) => ({ ...s, ...overrides[s.key] }));
+  const visible = allSeries.filter((s) => !hidden.has(s.label));
+  const editingSeries = allSeries.find((s) => s.key === editing);
+  const restyle = (key, patch) => setOverrides((o) => ({ ...o, [key]: { ...o[key], ...patch } }));
 
   return (
     <div style={styles.app}>
@@ -139,18 +154,48 @@ export default function QuestionnaireSpider() {
             <div style={{ ...styles.card, ...styles.chartCard }}>
               <RadarChart questions={data.questions} series={visible} min={min} max={max} />
               <div style={styles.legend}>
-                {visible.map((s) => <span key={s.key}><span style={styles.swatch(s.color)} />{s.label}</span>)}
-              </div>
-            </div>
-            <div style={styles.card}>
-              <h3 style={styles.h3}>Show / hide individual people</h3>
-              <div style={styles.chips}>
-                {data.people.map((p, i) => (
-                  <button key={i} type="button" aria-pressed={!hidden.has(p.name)} style={styles.chip(!hidden.has(p.name), PALETTE[i % PALETTE.length])} onClick={() => toggle(p.name)}>
-                    <span style={styles.swatch(PALETTE[i % PALETTE.length])} />{p.name}
+                {visible.map((s) => (
+                  <button key={s.key} type="button" title="Click to change colour and line style" onClick={() => setEditing(s.key)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: COLORS.text, fontSize: 13, textDecoration: editing === s.key ? "underline" : "none" }}>
+                    <svg width={26} height={10} style={{ marginRight: 6 }}><line x1={0} y1={5} x2={26} y2={5} stroke={s.color} strokeWidth={s.width ?? 2} strokeDasharray={s.dash || undefined} /></svg>{s.label}
                   </button>
                 ))}
               </div>
+            </div>
+            <div style={styles.card}>
+              <h3 style={styles.h3}>Show / hide people · click a dot to restyle</h3>
+              <div style={styles.chips}>
+                {data.people.map((p, i) => (
+                  <span key={i} style={{ ...styles.chip(!hidden.has(p.name), allSeries[i].color), display: "inline-flex", alignItems: "center", gap: 6 }}>
+                    <button type="button" title="Change colour and line style" onClick={() => setEditing(allSeries[i].key)} style={{ ...styles.colorDot(allSeries[i].color, editing === allSeries[i].key), width: 14, height: 14 }} />
+                    <button type="button" aria-pressed={!hidden.has(p.name)} onClick={() => toggle(p.name)} style={{ background: "none", border: "none", padding: 0, cursor: "pointer", color: COLORS.text, fontSize: 12 }}>{p.name}</button>
+                  </span>
+                ))}
+                {["best", "avg"].map((k) => {
+                  const s = allSeries.find((x) => x.key === k);
+                  return <button key={k} type="button" style={styles.chip(editing === k, s.color)} onClick={() => setEditing(k)}><span style={styles.swatch(s.color)} />{s.label}</button>;
+                })}
+              </div>
+              {editingSeries && (
+                <div style={styles.editor}>
+                  <strong style={{ fontSize: 13 }}>{editingSeries.label}</strong>
+                  <div style={styles.editorRow}>
+                    {[...PALETTE, BEST_COLOR].map((c) => (
+                      <button key={c} type="button" aria-label={c} style={styles.colorDot(c, editingSeries.color === c)} onClick={() => restyle(editing, { color: c })} />
+                    ))}
+                    <input type="color" aria-label="Custom colour" value={editingSeries.color} onChange={(e) => restyle(editing, { color: e.target.value })} />
+                  </div>
+                  <div style={styles.editorRow}>
+                    <select style={styles.select} aria-label="Line style" value={editingSeries.dash || ""} onChange={(e) => restyle(editing, { dash: e.target.value })}>
+                      {DASHES.map((d) => <option key={d.label} value={d.value}>{d.label}</option>)}
+                    </select>
+                    <select style={styles.select} aria-label="Line width" value={editingSeries.width ?? 2} onChange={(e) => restyle(editing, { width: parseFloat(e.target.value) })}>
+                      {WIDTHS.map((w) => <option key={w} value={w}>{w}px</option>)}
+                    </select>
+                    <button type="button" style={styles.button(true)} onClick={() => { setOverrides((o) => { const n = { ...o }; delete n[editing]; return n; }); }}>Reset</button>
+                    <button type="button" style={styles.button(true)} onClick={() => setEditing(null)}>Done</button>
+                  </div>
+                </div>
+              )}
               <h3 style={styles.h3}>Questions detected</h3>
               <table style={styles.table}>
                 <thead><tr>{["Question", "Average", "Best"].map((h) => <th key={h} style={styles.cell}>{h}</th>)}</tr></thead>

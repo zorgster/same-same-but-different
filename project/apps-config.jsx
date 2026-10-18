@@ -32,6 +32,16 @@ export const APPS = [
         component: lazyTool(() => import("./table-inspector.jsx")),
       },
       {
+        id: "questionnaire-spider",
+        name: "Questionnaire Spider",
+        version: "0.1.0",
+        desc: "Plot questionnaire responses per person as a radar chart against the best possible score and group average",
+        status: "beta",
+        component: lazyTool(
+          () => import("./questionnaire-spider/QuestionnaireSpider.jsx"),
+        ),
+      },
+      {
         id: "data-imputation",
         name: "Data Imputation",
         version: "0.1.0",
@@ -55,16 +65,6 @@ export const APPS = [
         status: "experimental",
         component: lazyTool(
           () => import("./pdf-table-extractor/PdfTableExtractor.jsx"),
-        ),
-      },
-      {
-        id: "questionnaire-spider",
-        name: "Questionnaire Spider",
-        version: "0.1.0",
-        desc: "Plot questionnaire responses per person as a radar chart against the best possible score and group average",
-        status: "experimental",
-        component: lazyTool(
-          () => import("./questionnaire-spider/QuestionnaireSpider.jsx"),
         ),
       },
       {

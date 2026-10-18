@@ -58,6 +58,16 @@ export const APPS = [
         ),
       },
       {
+        id: "questionnaire-spider",
+        name: "Questionnaire Spider",
+        version: "0.1.0",
+        desc: "Plot questionnaire responses per person as a radar chart against the best possible score and group average",
+        status: "experimental",
+        component: lazyTool(
+          () => import("./questionnaire-spider/QuestionnaireSpider.jsx"),
+        ),
+      },
+      {
         id: "data-requester",
         name: "Data Requester",
         version: "0.1.0",

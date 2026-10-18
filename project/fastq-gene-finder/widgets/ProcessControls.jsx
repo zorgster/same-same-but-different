@@ -52,6 +52,9 @@ export default function ProcessControls({
     return isNaN(v) ? "?" : v.toLocaleString();
   };
 
+  // Upper limit = logical processors reported by the browser (e.g. 4 cores + hyperthreading = 8)
+  const maxWorkers = navigator.hardwareConcurrency || 16;
+
   return (
     <div style={Styles.panel}>
       <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0.5rem" }}>
@@ -68,15 +71,15 @@ export default function ProcessControls({
             <input
               type="number"
               min={1}
-              max={navigator.hardwareConcurrency || 16}
+              max={maxWorkers}
               value={workerCount}
               onChange={(e) =>
                 onWorkerCountChange(
-                  Math.max(1, Math.min(navigator.hardwareConcurrency || 16, Number(e.target.value) || 1)),
+                  Math.max(1, Math.min(maxWorkers, Number(e.target.value) || 1)),
                 )
               }
               style={{ width: "2.5rem" }}
-              title="Parallel worker threads (1–8)"
+              title={`Parallel worker threads (1–${maxWorkers}: this device reports ${maxWorkers} logical processors)`}
             />
           </label>
         )}

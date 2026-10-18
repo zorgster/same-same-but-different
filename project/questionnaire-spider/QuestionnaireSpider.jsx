@@ -103,7 +103,7 @@ export default function QuestionnaireSpider() {
 
   const averages = data ? data.questions.map((_, qi) => averageFor(data.people, qi)) : [];
   const allSeries = (data ? [
-    ...data.people.map((p, i) => ({ key: `p:${p.name}`, label: p.name, values: p.values, color: PALETTE[i % PALETTE.length], fill: true, showPoints: true })),
+    ...data.people.map((p, i) => ({ key: `p:${p.name}`, label: p.name, values: p.values, color: PALETTE[i % PALETTE.length], fillOpacity: 0.13, showPoints: true })),
     { key: "best", label: "Best possible", values: data.questions.map(() => best), color: BEST_COLOR, dash: "6 4" },
     { key: "avg", label: "Average", values: averages, color: AVG_COLOR, dash: "2 3", width: 2.5, showPoints: true },
   ] : []).map((s) => ({ ...s, ...overrides[s.key] }));
@@ -191,6 +191,11 @@ export default function QuestionnaireSpider() {
                     <select style={styles.select} aria-label="Line width" value={editingSeries.width ?? 2} onChange={(e) => restyle(editing, { width: parseFloat(e.target.value) })}>
                       {WIDTHS.map((w) => <option key={w} value={w}>{w}px</option>)}
                     </select>
+                    <label style={{ ...styles.label, display: "flex", alignItems: "center", gap: 6, margin: 0 }}>
+                      Shading
+                      <input type="range" min={0} max={0.6} step={0.01} value={editingSeries.fillOpacity ?? 0} onChange={(e) => restyle(editing, { fillOpacity: parseFloat(e.target.value) })} />
+                      {Math.round((editingSeries.fillOpacity ?? 0) * 100)}%
+                    </label>
                     <button type="button" style={styles.button(true)} onClick={() => { setOverrides((o) => { const n = { ...o }; delete n[editing]; return n; }); }}>Reset</button>
                     <button type="button" style={styles.button(true)} onClick={() => setEditing(null)}>Done</button>
                   </div>

@@ -1805,7 +1805,7 @@ export default function FastqGeneFinderApp() {
             {seedSource && (
               <span style={{ fontSize: "11px", alignSelf: "center", fontFamily: "monospace" }}>
                 {seedSource.type === "number"
-                  ? `Seeds from seed number ${seedSource.value}`
+                  ? `Random seed: ${seedSource.value}`
                   : `Seeds loaded from ${seedSource.name}${seedSource.seedNumber != null ? ` (seed number ${seedSource.seedNumber})` : ""}`}
               </span>
             )}

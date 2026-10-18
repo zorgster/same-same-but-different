@@ -245,10 +245,15 @@ async function streamFastq({
 /* ============================================================
    SEED GENERATION + MATCHING
 ============================================================ */
+function positionsPerSeedFor(readLength) {
+  const { positionsPerSeedFraction, maxPositionsPerSeedArray } = FASTQ_GENE_FINDER_CONFIG;
+  return Math.min(maxPositionsPerSeedArray, Math.max(1, Math.floor(readLength * positionsPerSeedFraction)));
+}
+
 function generateSeedArrays(
   readLength,
   seedNumber,
-  positionsPerArray = FASTQ_GENE_FINDER_CONFIG.positionsPerSeedArray,
+  positionsPerArray = positionsPerSeedFor(readLength),
 ) {
   const rng = mulberry32(seedNumber);
   let seedId = 0;

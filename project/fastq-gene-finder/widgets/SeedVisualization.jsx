@@ -1,4 +1,3 @@
-import { FASTQ_GENE_FINDER_CONFIG } from "../fastq-gene-finder-config";
 import * as Styles from "../styles/fastq-gene-finder-styles.jsx";
 
 /* ============================================================
@@ -15,12 +14,14 @@ export default function SeedVisualization({ seedArrays, readLength }) {
 
   const squareSize = Math.max(2, Math.min(8, 400 / readLength));
   const gap = 1;
+  // Actual positions per array (correct for generated and loaded seed sets)
+  const positionsPerSeed = Math.max(...seedArrays.map((s) => s.positions.length));
 
   return (
     <div style={Styles.seedPanel}>
       <h3>
         Seed Arrays ({seedArrays.length} seeds, {readLength} positions —{" "}
-        {FASTQ_GENE_FINDER_CONFIG.positionsPerSeedArray} positions/seed)
+        {positionsPerSeed} positions/seed)
       </h3>
       <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
         {seedArrays.map((seed, seedIdx) => {

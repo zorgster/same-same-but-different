@@ -196,6 +196,8 @@ export default function QuestionnaireSpider() {
                       <input type="range" min={0} max={0.6} step={0.01} value={editingSeries.fillOpacity ?? 0} onChange={(e) => restyle(editing, { fillOpacity: parseFloat(e.target.value) })} />
                       {Math.round((editingSeries.fillOpacity ?? 0) * 100)}%
                     </label>
+                  </div>
+                  <div style={{ ...styles.editorRow, justifyContent: "flex-end" }}>
                     <button type="button" style={styles.button(true)} onClick={() => { setOverrides((o) => { const n = { ...o }; delete n[editing]; return n; }); }}>Reset</button>
                     <button type="button" style={styles.button(true)} onClick={() => setEditing(null)}>Done</button>
                   </div>

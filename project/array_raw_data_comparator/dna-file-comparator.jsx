@@ -193,8 +193,12 @@ function GenoDisplay({ value }) {
   );
 }
 
+// AncestryDNA numbers X/Y/XY(PAR)/MT as 23-26; other vendors use letters.
+const CHR_ALIASES = { "23": "X", "24": "Y", "25": "XY", "26": "MT", M: "MT" };
+
 function normalizeChromosome(value) {
-  return String(value || "").trim().replace(/^chr/i, "").toUpperCase();
+  const chr = String(value || "").trim().replace(/^chr/i, "").toUpperCase();
+  return CHR_ALIASES[chr] || chr;
 }
 
 function getLocusKey(snp) {
@@ -282,6 +286,13 @@ function detectFormat(lines) {
   return "Unknown";
 }
 
+function detectBuild(lowerLine) {
+  if (/grch\s*38|hg\s*38|build\s*_?38/.test(lowerLine)) return "38";
+  if (/grch\s*37|hg\s*19|build\s*_?37/.test(lowerLine)) return "37";
+  if (/hg\s*18|ncbi\s*36|build\s*_?36/.test(lowerLine)) return "36";
+  return "";
+}
+
 function parseFile(content) {
   const lines = String(content || "").split("\n");
   const format = detectFormat(lines);
@@ -289,6 +300,8 @@ function parseFile(content) {
   let columnMap = null;
   let delimiter = null;
   let strandNote = "";
+  let build = "";
+  let duplicateCount = 0;
 
   const lineSplitter = (line) => splitDelimitedLine(line, delimiter || (line.includes(",") && !line.includes("\t") ? "," : "\t")).map((col) => col.trim());
 
@@ -307,6 +320,7 @@ function parseFile(content) {
       const lower = line.toLowerCase();
       if (lower.includes("+ strand") || lower.includes("+strand")) strandNote = "+ strand";
       else if (lower.includes("forward strand")) strandNote = "forward strand";
+      if (!build) build = detectBuild(lower);
       continue;
     }
 
@@ -326,6 +340,7 @@ function parseFile(content) {
     if (normalizeGeno(rawGeno) === "--") rawGeno = "--";
 
     if (rsid && pos) {
+      if (snps.has(rsid)) duplicateCount += 1;
       snps.set(rsid, {
         rsid,
         chr,
@@ -338,7 +353,7 @@ function parseFile(content) {
   }
 
   const usesSlash = Array.from(snps.values()).some((snp) => snp.hasSlash);
-  return { format, snps, usesSlash, strandNote, count: snps.size };
+  return { format, snps, usesSlash, strandNote, build, duplicateCount, count: snps.size };
 }
 
 function compareFiles(fileA, fileB) {
@@ -347,6 +362,7 @@ function compareFiles(fileA, fileB) {
   const onlyA = [];
   const onlyB = [];
   const concordant = [];
+  const bothNoCall = [];
   const processedA = new Set();
   const processedB = new Set();
 
@@ -364,7 +380,10 @@ function compareFiles(fileA, fileB) {
       processedB.add(rid);
 
       if (areEquivalentGenotypes(snpA.geno, snpB.geno)) {
-        concordant.push({ rid, pos: snpA.pos, chr: snpA.chr, genoA: snpA.rawGeno, genoB: snpB.rawGeno });
+        const row = { rid, pos: snpA.pos, chr: snpA.chr, genoA: snpA.rawGeno, genoB: snpB.rawGeno };
+        // A no-call in both files is missing data, not agreement.
+        if (snpA.geno === "--" && snpB.geno === "--") bothNoCall.push(row);
+        else concordant.push(row);
       } else {
         discordant.push({ rid, pos: snpA.pos, chr: snpA.chr, genoA: snpA.rawGeno, genoB: snpB.rawGeno });
       }
@@ -389,7 +408,7 @@ function compareFiles(fileA, fileB) {
     if (!processedB.has(rid)) onlyB.push(snp);
   }
 
-  return { discordant, rsidMismatch, onlyA, onlyB, concordant };
+  return { discordant, rsidMismatch, onlyA, onlyB, concordant, bothNoCall };
 }
 
 function makeDiscordantNote(genoA, genoB) {
@@ -397,8 +416,8 @@ function makeDiscordantNote(genoA, genoB) {
   const b = normalizeGeno(genoB);
 
   if (a[0] && b[0] && a[0] !== b[0] && a[0] === complement(b[0])) return "possible strand flip";
-  if (a.length !== b.length) return "different call length";
   if (a === "--" || b === "--") return "no-call in one";
+  if (a.length !== b.length) return "different call length";
 
   const isHet = (value) => value.length === 2 && value[0] !== value[1];
   if (isHet(a) && !isHet(b)) return "het vs hom";
@@ -557,6 +576,12 @@ function FileDrop({ label, tone, fileData, onFile, onClear }) {
           <div style={{ fontSize: 13, fontWeight: 600 }}>{fileData.count.toLocaleString()} SNPs</div>
           <div style={{ fontSize: 11, color: "#5f6f84" }}>{fileData.usesSlash ? "Format: A/G" : "Format: AG"}</div>
           {fileData.strandNote ? <div style={{ fontSize: 11, color: "#5f6f84" }}>Reported: {fileData.strandNote}</div> : null}
+          <div style={{ fontSize: 11, color: fileData.build ? "#5f6f84" : "#8a5a1f" }}>
+            {fileData.build ? `Build ${fileData.build}` : "Build not stated in header"}
+          </div>
+          {fileData.duplicateCount ? (
+            <div style={{ fontSize: 11, color: "#8a5a1f" }}>{fileData.duplicateCount.toLocaleString()} duplicate rsIDs (last kept)</div>
+          ) : null}
           <button
             type="button"
             onClick={(event) => {
@@ -616,12 +641,42 @@ export default function DnaFileComparatorApp() {
     return compareFiles(fileA, fileB);
   }, [fileA, fileB]);
 
+  const concordanceStats = useMemo(() => {
+    if (!compared) return null;
+    const noCallOne = compared.discordant.filter(
+      (row) => normalizeGeno(row.genoA) === "--" || normalizeGeno(row.genoB) === "--"
+    ).length;
+    const concordant = compared.concordant.length;
+    const comparable = concordant + (compared.discordant.length - noCallOne);
+    return {
+      concordant,
+      comparable,
+      noCallOne,
+      bothNoCall: compared.bothNoCall.length,
+      pct: comparable ? (concordant / comparable) * 100 : null,
+    };
+  }, [compared]);
+
+  const buildNote = useMemo(() => {
+    if (!fileA || !fileB) return null;
+    if (fileA.build && fileB.build && fileA.build !== fileB.build) {
+      return {
+        warn: true,
+        text: `Genome build differs (A: ${fileA.build}, B: ${fileB.build}). Positions are not comparable, so rsID mismatch and Only-in lists will be unreliable.`,
+      };
+    }
+    if (!fileA.build || !fileB.build) {
+      return { warn: false, text: "Genome build not stated in one or both headers; make sure both files use the same build." };
+    }
+    return null;
+  }, [fileA, fileB]);
+
   const summaryRows = useMemo(() => {
     if (!fileA || !fileB) return [];
     const statsA = computeChrStats(fileA.snps);
     const statsB = computeChrStats(fileB.snps);
     const allChrs = new Set([...Object.keys(statsA), ...Object.keys(statsB)]);
-    const chrOrder = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "X", "Y", "MT"];
+    const chrOrder = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "X", "Y", "XY", "MT"];
     const sorted = Array.from(allChrs).sort((a, b) => {
       const indexA = chrOrder.indexOf(a);
       const indexB = chrOrder.indexOf(b);
@@ -799,6 +854,18 @@ export default function DnaFileComparatorApp() {
       {compared ? (
         <>
           <div style={styles.note}>{strandNote}</div>
+
+          {buildNote ? (
+            <div style={buildNote.warn ? { ...styles.note, background: "#ffe9e7", color: "#b42318" } : styles.note}>{buildNote.text}</div>
+          ) : null}
+
+          {concordanceStats ? (
+            <div style={{ ...styles.note, background: "#ebf8ee", color: "#2b6a39" }}>
+              <strong>Concordance: {concordanceStats.pct === null ? "n/a" : `${concordanceStats.pct.toFixed(3)}%`}</strong>{" "}
+              ({concordanceStats.concordant.toLocaleString()} of {concordanceStats.comparable.toLocaleString()} SNPs called in both files).
+              Excluded: {concordanceStats.bothNoCall.toLocaleString()} no-call in both, {concordanceStats.noCallOne.toLocaleString()} no-call in one.
+            </div>
+          ) : null}
 
           <div style={styles.tableWrap}>
             <table style={styles.table}>
